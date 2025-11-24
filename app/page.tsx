@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { EventosTable } from '@/components/EventosTable';
 import { Header } from '@/components/Header';
 
+
 export interface Evento {
   empleadoId: string;
   nombre: string;

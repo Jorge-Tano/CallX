@@ -1,135 +1,272 @@
 import { NextResponse } from 'next/server';
 import DigestFetch from 'digest-fetch';
 
+// Permite conexión HTTPS sin validar certificado (útil para dispositivos Hikvision)
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-const username = "admin";
-const password = "Tattered3483";
-const deviceIp = "172.31.7.206";
+/**
+ * Configuración principal del servicio de consulta de eventos.
+ */
+const CONFIG = {
+  username: "admin",
+  password: "Tattered3483",
+  deviceIp: "172.31.0.229",
+  maxResults: 30,         // Límite de eventos por lote
+  maxRetries: 10          // Límite máximo de iteraciones en consulta por rango
+};
 
-export async function GET(request) {
-  try {
-    // Obtener parámetros de la URL
-    const { searchParams } = new URL(request.url);
-    const periodo = searchParams.get('periodo') || 'hoy'; // 'hoy', 'mes', 'año'
-    
-    const today = new Date();
-    let startTime, endTime;
+/**
+ * Convierte fechas a formato requerido por el API de Hikvision.
+ */
+const formatHikvisionDate = (date) =>
+  date.toISOString().replace(/\.\d{3}Z$/, '');
 
-    // Configurar rango de fechas según el periodo solicitado
-    switch (periodo) {
-    case 'año': {
-      const inicioAno = new Date(today.getFullYear(), 0, 1);
-      startTime = `${inicioAno.toISOString().split("T")[0]}T00:00:00`;
-      endTime = `${today.toISOString().split("T")[0]}T23:59:59`;
-      break;
-    }
+/**
+ * Crea un cliente de autenticación Digest.
+ */
+const createDigestClient = () =>
+  new DigestFetch(CONFIG.username, CONFIG.password, {
+    disableRetry: false,
+    algorithm: 'MD5'
+  });
 
-    case 'mes': {
-      const inicioMes = new Date(today.getFullYear(), today.getMonth(), 1);
-      startTime = `${inicioMes.toISOString().split("T")[0]}T00:00:00`;
-      endTime = `${today.toISOString().split("T")[0]}T23:59:59`;
-      break;
-    }
-
-    case 'hoy':
-    default: {
-      startTime = `${today.toISOString().split("T")[0]}T00:00:00`;
-      endTime = `${today.toISOString().split("T")[0]}T23:59:59`;
-    }
+/**
+ * Cliente que realiza peticiones al endpoint Hikvision ACS Event.
+ */
+class HikvisionClient {
+  constructor(client, deviceIp) {
+    this.client = client;
+    this.baseUrl = `https://${deviceIp}/ISAPI/AccessControl/AcsEvent?format=json`;
   }
 
-    const url = `https://${deviceIp}/ISAPI/AccessControl/AcsEvent?format=json`;
+  /**
+   * Realiza una solicitud POST para obtener eventos según un rango.
+   */
+  async fetchEvents(searchCondition) {
+    const body = {
+      AcsEventCond: {
+        searchID: searchCondition.tag,
+        searchResultPosition: searchCondition.position,
+        maxResults: searchCondition.maxResults,
+        major: 5,   // Código de eventos ACS
+        minor: 0,   // Se especifica luego con filtrado
+        startTime: searchCondition.startTime,
+        endTime: searchCondition.endTime
+      }
+    };
 
-    const client = new DigestFetch(username, password, {
-      disableRetry: true,
+    const res = await this.client.fetch(this.baseUrl, {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" }
     });
 
-    let todosLosEventos = [];
+    // Manejo de errores HTTP
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`Error ${res.status}: ${errorText}`);
+    }
+
+    return res.json();
+  }
+}
+
+/**
+ * Servicio responsable de:
+ * - Consultar eventos en rangos
+ * - Aplicar paginación por lotes
+ * - Consultar meses completos o el año
+ */
+class EventQueryService {
+  constructor(hikvisionClient) {
+    this.client = hikvisionClient;
+  }
+
+  /**
+   * Consulta eventos dentro de un rango de fechas.
+   * Implementa:
+   *  - paginación por posición
+   *  - límite de reintentos/lotes
+   */
+  async queryEventsByRange(startTime, endTime, tag = 'consulta') {
+    let eventos = [];
     let position = 0;
-    const maxResults = 30;
-    let hasMore = true;
+    let intento = 1;
 
-    console.log(`📅 Consultando eventos: ${periodo} (${startTime} - ${endTime})`);
-
-    // Hacer peticiones hasta que no haya más eventos
-    while (hasMore) {
-      const body = {
-        AcsEventCond: {
-          searchID: "1",
-          searchResultPosition: position,
-          maxResults: maxResults,
-          major: 5,
-          minor: 0,
-          startTime,
-          endTime,
-        },
+    while (intento <= CONFIG.maxRetries) {
+      const searchCondition = {
+        tag,
+        position,
+        maxResults: CONFIG.maxResults,
+        startTime,
+        endTime
       };
 
-      const res = await client.fetch(url, {
-        method: "POST",
-        body: JSON.stringify(body),
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
+      const data = await this.client.fetchEvents(searchCondition);
+      const eventosLote = data?.AcsEvent?.InfoList || [];
 
-      const data = await res.json();
-      const eventos = data?.AcsEvent?.InfoList || [];
+      if (eventosLote.length === 0) break; // no hay más eventos
 
-      if (eventos.length === 0) {
-        hasMore = false;
-      } else {
-        todosLosEventos = [...todosLosEventos, ...eventos];
-        position += maxResults;
-        
-        console.log(`📦 Lote ${Math.floor(position / maxResults)}: ${eventos.length} eventos (Total acumulado: ${todosLosEventos.length})`);
-        
-        // Si recibimos menos de maxResults, ya no hay más
-        if (eventos.length < maxResults) {
-          hasMore = false;
-        }
+      eventos = [...eventos, ...eventosLote];
+      position += eventosLote.length;
+      intento++;
+
+      // Último lote si viene incompleto
+      if (eventosLote.length < CONFIG.maxResults) break;
+
+      // Pausa ligera entre solicitudes para evitar bloqueo del dispositivo
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    return eventos;
+  }
+
+  /**
+   * Consulta todos los meses de un año, en orden.
+   */
+  async queryMonthlyEvents(year) {
+    const today = new Date();
+    let todosLosEventosAnuales = [];
+
+    for (let month = 0; month < 12; month++) {
+      const inicioMes = new Date(year, month, 1);
+      const finMes = new Date(year, month + 1, 0, 23, 59, 59);
+
+      // Omitir meses futuros
+      if (inicioMes > today) continue;
+
+      const endOfMonth = finMes > today ? today : finMes;
+
+      const startTimeMes = formatHikvisionDate(inicioMes);
+      const endTimeMes = formatHikvisionDate(endOfMonth);
+
+      try {
+        const eventosMes = await this.queryEventsByRange(
+          startTimeMes,
+          endTimeMes,
+          `mes-${month + 1}`
+        );
+
+        todosLosEventosAnuales = [...todosLosEventosAnuales, ...eventosMes];
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+      } catch (error) {
+        console.error(`Error en mes ${month + 1}:`, error.message);
       }
     }
 
-    // Filtrar solo eventos de acceso de personas (minor: 75)
-    const eventosFiltrados = todosLosEventos
-    .filter(evento => evento.minor === 75)
-    .map(evento => {
+    return todosLosEventosAnuales;
+  }
+
+  /**
+   * Consulta todos los eventos del mes actual.
+   */
+  async queryCurrentMonth() {
+    const today = new Date();
+    const inicioMes = new Date(today.getFullYear(), today.getMonth(), 1);
+    const finMes = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59);
+
+    const startTime = formatHikvisionDate(inicioMes);
+    const endTime = formatHikvisionDate(finMes);
+
+    return this.queryEventsByRange(startTime, endTime, 'mes-completo');
+  }
+
+  /**
+   * Consulta los eventos del día actual.
+   */
+  async queryToday() {
+    const today = new Date();
+    const inicioDia = new Date(today);
+    inicioDia.setHours(0, 0, 0, 0);
+
+    const finDia = new Date(today);
+    finDia.setHours(23, 59, 59, 999);
+
+    const startTime = formatHikvisionDate(inicioDia);
+    const endTime = formatHikvisionDate(finDia);
+
+    return this.queryEventsByRange(startTime, endTime, 'hoy');
+  }
+}
+
+/**
+ * Procesa y transforma eventos:
+ * - Filtra accesos (minor === 75)
+ * - Normaliza estructura para frontend
+ * - Ordena por hora descendente
+ */
+class EventProcessor {
+  static filterAndTransformEvents(eventos) {
+    return eventos
+      .filter(evento => evento.minor === 75)  // Eventos de acceso
+      .map(evento => {
         const fechaObj = new Date(evento.time);
-
         return {
-        nombre: evento.name,
-        empleadoId: evento.employeeNoString,
-        hora: evento.time,
-        fecha: fechaObj.toLocaleDateString("es-CO"),  // <-- NUEVO
-        tipo: evento.label,
-        foto: evento.pictureURL
+          nombre: evento.name,
+          empleadoId: evento.employeeNoString,
+          hora: evento.time,
+          fecha: fechaObj.toLocaleDateString("es-CO"),
+          tipo: evento.label,
+          foto: evento.pictureURL
         };
-    })
-  .sort((a, b) => new Date(b.hora).getTime() - new Date(a.hora).getTime());
+      })
+      .sort((a, b) =>
+        new Date(b.hora).getTime() - new Date(a.hora).getTime()
+      );
+  }
+}
 
-    console.log(`✅ Total eventos filtrados: ${eventosFiltrados.length}`);
+/**
+ * Endpoint principal:
+ * - Determina el periodo solicitado
+ * - Consulta y filtra eventos
+ * - Devuelve respuesta JSON limpia
+ */
+export async function GET(request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const periodo = searchParams.get('periodo') || 'hoy';
+
+    const digestClient = createDigestClient();
+    const hikvisionClient = new HikvisionClient(digestClient, CONFIG.deviceIp);
+    const queryService = new EventQueryService(hikvisionClient);
+
+    let todosLosEventos = [];
+
+    switch (periodo) {
+      case 'año': {
+        const currentYear = new Date().getFullYear();
+        todosLosEventos = await queryService.queryMonthlyEvents(currentYear);
+        break;
+      }
+
+      case 'mes': {
+        todosLosEventos = await queryService.queryCurrentMonth();
+        break;
+      }
+
+      case 'hoy':
+      default: {
+        todosLosEventos = await queryService.queryToday();
+        break;
+      }
+    }
+
+    const eventosFiltrados = EventProcessor.filterAndTransformEvents(todosLosEventos);
 
     return NextResponse.json({
       success: true,
       periodo,
-      rangoFechas: {
-        inicio: startTime,
-        fin: endTime
-      },
       total: todosLosEventos.length,
       accesos: eventosFiltrados.length,
       eventos: eventosFiltrados
     });
 
   } catch (error) {
-    console.error("❌ Error al consultar:", error);
+    console.error("Error al consultar:", error);
     return NextResponse.json(
-      {
-        success: false,
-        error: error.message
-      },
+      { success: false, error: error.message },
       { status: 500 }
     );
   }
