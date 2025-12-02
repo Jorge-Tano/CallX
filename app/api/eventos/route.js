@@ -55,7 +55,7 @@ class HikvisionClient {
       }
 
       const data = await res.json();
-
+      
       // DEBUG: Ver estructura de respuesta
       console.log(`📊 ${this.deviceIp} respuesta:`, {
         listaEventos: data?.AcsEvent?.InfoList?.length || 0,
@@ -82,7 +82,7 @@ class RangeQueryService {
     let position = 0;
     let intento = 1;
     let totalObtenidos = 0;
-
+    
     // Aumentar intentos para obtener más eventos
     while (intento <= 30) {  // Máximo 30 intentos = 3000 eventos (100 × 30)
       const searchCondition = {
@@ -178,34 +178,6 @@ class TimePeriodService {
       tag: '30dias'
     };
   }
-
-  getLastWeekRange() {
-    const today = new Date();
-
-    // Obtener día de la semana (0 = domingo, 1 = lunes...)
-    const day = today.getDay();
-
-    // Calcular lunes de esta semana
-    const mondayThisWeek = new Date(today);
-    mondayThisWeek.setDate(today.getDate() - (day === 0 ? 6 : day - 1));
-    mondayThisWeek.setHours(0, 0, 0, 0);
-
-    // Lunes de la semana pasada
-    const mondayLastWeek = new Date(mondayThisWeek);
-    mondayLastWeek.setDate(mondayThisWeek.getDate() - 7);
-
-    // Domingo de la semana pasada
-    const sundayLastWeek = new Date(mondayLastWeek);
-    sundayLastWeek.setDate(mondayLastWeek.getDate() + 6);
-    sundayLastWeek.setHours(23, 59, 59, 999);
-
-    return {
-      startTime: formatHikvisionDate(mondayLastWeek),
-      endTime: formatHikvisionDate(sundayLastWeek),
-      tag: "semana_pasada"
-    };
-  }
-
 }
 
 // Procesador de eventos - VERSIÓN MEJORADA
@@ -220,20 +192,20 @@ class EventProcessor {
       if (evento.dispositivo === '172.31.0.164') {
         // Convertir de +08:00 a -05:00 = restar 13 horas
         fecha.setHours(fecha.getHours() - 13);
-
+        
         const original = evento.time;
         const corregido = fecha.toISOString();
-
+        
         // Solo loguear algunos para no saturar
         if (Math.random() < 0.1) { // 10% de los eventos
-          console.log(`🕒 ${evento.dispositivo}: ${original.split('T')[1]?.substring(0, 8)} → ${corregido.split('T')[1]?.substring(0, 8)}`);
+          console.log(`🕒 ${evento.dispositivo}: ${original.split('T')[1]?.substring(0,8)} → ${corregido.split('T')[1]?.substring(0,8)}`);
         }
-
+        
         return corregido;
       }
-
+      
       return evento.time;
-
+      
     } catch (error) {
       console.log(`⚠️ Error corrigiendo zona horaria: ${evento.time}`, error.message);
       return evento.time;
@@ -274,22 +246,22 @@ class EventProcessor {
       if (labelLower.includes('salida')) return 'Solo Salida';
       if (labelLower.includes('entrada')) return 'Solo Entrada';
     }
-
+    
     // Por defecto, asumir entrada para eventos de marcación
     return 'Solo Entrada';
   }
 
   static extraerHoraSimple(timestamp) {
     if (!timestamp) return null;
-
+    
     try {
       const fecha = new Date(timestamp);
       if (isNaN(fecha.getTime())) return null;
-
+      
       const horas = fecha.getHours().toString().padStart(2, '0');
       const minutos = fecha.getMinutes().toString().padStart(2, '0');
       const segundos = fecha.getSeconds().toString().padStart(2, '0');
-
+      
       return `${horas}:${minutos}:${segundos}`;
     } catch (error) {
       console.log('⚠️ Error extrayendo hora:', error.message);
@@ -304,7 +276,7 @@ class EventProcessor {
     const conEmployeeNo = eventos.filter(e => e.employeeNoString && e.employeeNoString.trim() !== '').length;
     const conCardNo = eventos.filter(e => e.cardNo && e.cardNo.trim() !== '').length;
     const conNombre = eventos.filter(e => e.name && e.name !== 'Sin nombre' && e.name.trim() !== '').length;
-    const sinIdentificacion = eventos.filter(e =>
+    const sinIdentificacion = eventos.filter(e => 
       !e.employeeNoString && !e.cardNo && (!e.name || e.name === 'Sin nombre')
     ).length;
 
@@ -337,12 +309,12 @@ class EventProcessor {
     });
 
     console.log(`✅ Procesados ${eventosProcesados.length} eventos para BD`);
-
+    
     // Mostrar algunos ejemplos
     if (eventosProcesados.length > 0) {
       console.log(`📋 Ejemplos procesados:`);
       eventosProcesados.slice(0, 3).forEach((e, i) => {
-        console.log(`   ${i + 1}. Doc: ${e.empleadoId.substring(0, 15)}..., Nombre: ${e.nombre.substring(0, 20)}..., Hora: ${e.hora}, Tipo: ${e.tipo}`);
+        console.log(`   ${i+1}. Doc: ${e.empleadoId.substring(0, 15)}..., Nombre: ${e.nombre.substring(0, 20)}..., Hora: ${e.hora}, Tipo: ${e.tipo}`);
       });
     }
 
@@ -384,11 +356,6 @@ class BiometricService {
       case 'hoy':
       default:
         timeRange = timeService.getTodayRange();
-
-      case 'semana_pasada':
-        timeRange = timeService.getLastWeekRange();
-        break;
-
     }
 
     console.log(`🎯 Consultando con rango: ${timeRange.startTime} a ${timeRange.endTime}`);
