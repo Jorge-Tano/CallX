@@ -12,21 +12,24 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen  flex items-center justify-center bg-gradient-to-b from-gray-100 to-gray-200">
+    <div className="min-h-screen flex bg-gray-100">
 
-      {/* CONTENEDOR PRINCIPAL */}
-      <div className="bg-white min-h-[500px] shadow-2xl rounded-xl overflow-hidden flex w-full max-w-4xl">
+      {/* IMAGEN GRANDE A LA IZQUIERDA */}
+      <div className="hidden md:flex w-1/2 min-h-screen justify-center items-center">
 
-        {/* PANEL IZQUIERDO (IMAGEN) */}
-        <div className="hidden md:block w-1/2 bg-cover bg-center"
+        <div
+          className="w-full h-full bg-contain bg-center bg-no-repeat"
           style={{
-            backgroundImage:
-              "url('https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcT2n6eDAYcZUVN7yVv_PXiwggkq5Av_jAjbaXUfo7iQCy77uNSjv5Kh1O3uSxezukU86RU&usqp=CAU')"
+            backgroundImage: "url('https://wallpapers.com/images/hd/scary-face-pictures-fvx05bim45ctjiwh.jpg')",
           }}
         ></div>
 
-        {/* PANEL DERECHO (FORMULARIO) */}
-        <div className="w-full md:w-1/2 p-8">
+      </div>
+
+      {/* CONTENEDOR DEL LOGIN */}
+      <div className="flex w-full md:w-1/2 items-center justify-center p-8">
+
+        <div className="bg-white w-full max-w-md p-8 rounded-xl shadow-xl">
 
           <h1 className="text-3xl font-bold text-center mb-6 text-green-700">
             Iniciar Sesión
@@ -44,7 +47,7 @@ export default function LoginPage() {
                   className="w-full outline-none"
                   placeholder="Nombre de usuario"
                   value={usuario}
-                  onChange={e => setUsuario(e.target.value)}
+                  onChange={(e) => setUsuario(e.target.value)}
                 />
               </div>
             </div>
@@ -52,7 +55,6 @@ export default function LoginPage() {
             {/* Contraseña */}
             <div>
               <label className="text-sm font-medium">Contraseña</label>
-
               <div className="flex items-center gap-2 border rounded-lg px-3 py-2 mt-1 relative">
                 <i className="bi bi-lock-fill text-gray-500"></i>
 
@@ -61,7 +63,7 @@ export default function LoginPage() {
                   className="w-full outline-none"
                   placeholder="•••••••••"
                   value={password}
-                  onChange={e => setPassword(e.target.value)}
+                  onChange={(e) => setPassword(e.target.value)}
                 />
 
                 <button
@@ -78,7 +80,7 @@ export default function LoginPage() {
               </div>
             </div>
 
-            {/* Olvidaste contraseña */}
+            {/* Olvidé contraseña */}
             <div className="text-center">
               <button
                 type="button"
@@ -88,15 +90,13 @@ export default function LoginPage() {
               </button>
             </div>
 
-            {/* Botón login */}
+            {/* Botón Login */}
             <button
               type="submit"
               className="w-full bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition shadow-md"
             >
               Ingresar
             </button>
-
-            
 
           </form>
 

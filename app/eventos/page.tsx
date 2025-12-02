@@ -230,14 +230,24 @@ export default function HomePage() {
   useEffect(() => {
     const sincronizarYActualizar = async () => {
       try {
-        console.log('🔄 Ejecutando sincronización automática...');
+        console.log('🔄 Ejecutando sincronización automática (3 días)...');
 
-        // 1. Consultar dispositivos biométricos (solo eventos de hoy)
-        const response = await fetch(`/api/eventos?rango=hoy`);
+        // Calcular fecha de hace 3 días
+        const hoy = new Date();
+        const hace3Dias = new Date(hoy);
+        hace3Dias.setDate(hoy.getDate() - 3);
+
+        const fechaHoy = hoy.toISOString().split('T')[0];
+        const fechaHace3Dias = hace3Dias.toISOString().split('T')[0];
+
+        console.log(`📅 Rango: ${fechaHace3Dias} a ${fechaHoy}`);
+
+        // 1. Consultar dispositivos biométricos (últimos 3 días)
+        const response = await fetch(`/api/eventos?rango=personalizado&fechaInicio=${fechaHace3Dias}&fechaFin=${fechaHoy}`);
         const data = await response.json();
 
         if (data.success && data.eventos && data.eventos.length > 0) {
-          console.log(`📥 ${data.eventos.length} eventos nuevos desde dispositivos`);
+          console.log(`📥 ${data.eventos.length} eventos nuevos de los últimos 3 días`);
 
           // 2. Transformar eventos del formato de dispositivos al formato de BD
           const eventosParaBD = data.eventos.map((evento: any) => {
@@ -273,8 +283,9 @@ export default function HomePage() {
           if (saveResult.success) {
             console.log(`💾 BD: ${saveResult.guardados} eventos procesados (${saveResult.nuevos} nuevos, ${saveResult.actualizados} actualizados)`);
 
-            // 4. Recargar vista desde BD solo si hubo cambios
-            if (saveResult.guardados > 0) {
+            // 4. Recargar vista desde BD solo si hay eventos de HOY
+            // Pero para evitar recargas innecesarias, verificamos si estamos viendo "hoy"
+            if (selectedPeriodo === 'hoy') {
               cargarEventosDesdeBD(selectedPeriodo, fechaInicio, fechaFin);
             }
           } else {
@@ -287,7 +298,7 @@ export default function HomePage() {
         console.error('❌ Error en sincronización automática:', error);
       }
     };
-
+    
     // Sincronizar inmediatamente al cargar
     sincronizarYActualizar();
 
@@ -297,7 +308,7 @@ export default function HomePage() {
     return () => clearInterval(interval);
   }, [selectedPeriodo, fechaInicio, fechaFin]);
 
-  
+
   const handlePeriodoChange = (periodo: 'hoy' | '7dias' | '30dias' | 'personalizado') => {
     setSelectedPeriodo(periodo);
     if (periodo !== 'personalizado') {

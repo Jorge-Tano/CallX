@@ -1,4 +1,3 @@
-// app/api/users/route.js
 import { NextResponse } from 'next/server';
 import DigestFetch from 'digest-fetch';
 
@@ -12,6 +11,18 @@ const CONFIG = {
   maxBatches: 15,
   authRetryAttempts: 3,
   delayBetweenBatches: 300
+};
+
+// Mapeo de departamentos basado en groupId
+const DEPARTAMENTOS = {
+  1: "TI",
+  2: "Teams Leaders", 
+  3: "Campana 5757",
+  4: "Campana SAV",
+  5: "Campana REFI",
+  6: "Campana PL",
+  7: "Campana PARLO",
+  8: "Administrativo"
 };
 
 class AuthManager {
@@ -158,79 +169,126 @@ class MultiDeviceUserService {
   }
 }
 
-export async function GET(request) {
-  try {
-    console.log('🔄 INICIANDO CONSULTA DE USUARIOS HIKVISION (MODO RAW)...');
+// Función para transformar usuarios desde raw data
+function transformarUsuariosDesdeRaw(rawData) {
+  const usuariosTransformados = [];
+
+  rawData.forEach(dispositivo => {
+    if (!dispositivo || !dispositivo.rawResponses) return;
+
+    const deviceIp = dispositivo.deviceIp || 'Desconocido';
     
-    const multi = new MultiDeviceUserService();
-    const result = await multi.getAllUsersFromAllDevices();
+    dispositivo.rawResponses.forEach((lote) => {
+      if (!lote || !lote.raw || !lote.raw.UserInfoSearch) return;
 
-    // Devolver el JSON COMPLETO de Hikvision sin transformar
-    const responseData = {
-      success: true,
-      message: "RESPUESTA RAW COMPLETA DE HIKVISION - SIN TRANSFORMAR",
-      timestamp: new Date().toISOString(),
-      devices: CONFIG.deviceIp,
-      hikvisionRawData: result.results, // Datos crudos completos
-      stats: {
-        totalDevices: CONFIG.deviceIp.length,
-        successfulDevices: result.results.filter(device => !device.error).length,
-        devicesWithErrors: result.results.filter(device => device.error).length
-      }
-    };
-
-    console.log('✅ CONSULTA RAW COMPLETADA');
-
-    // Log detallado de la estructura del primer usuario del primer dispositivo
-    result.results.forEach((device, deviceIndex) => {
-      if (device.rawResponses && device.rawResponses.length > 0) {
-        device.rawResponses.forEach((batch, batchIndex) => {
-          const users = batch.raw?.UserInfoSearch?.UserInfo;
-          if (users && users.length > 0) {
-            console.log(`\n🔍 DISPOSITIVO ${deviceIndex + 1}, BATCH ${batchIndex + 1}:`);
-            console.log(`📊 Total usuarios en este batch: ${users.length}`);
-            
-            // Mostrar estructura del primer usuario
-            const firstUser = users[0];
-            console.log('🧩 ESTRUCTURA DEL PRIMER USUARIO (primer batch):');
-            console.log(JSON.stringify(firstUser, null, 2));
-            
-            // Mostrar todas las claves disponibles en el primer usuario
-            console.log('🔑 CLAVES DISPONIBLES EN EL PRIMER USUARIO:');
-            if (firstUser) {
-              Object.keys(firstUser).forEach(key => {
-                console.log(`   - ${key}: ${JSON.stringify(firstUser[key])}`);
-              });
+      const usuariosLote = lote.raw.UserInfoSearch.UserInfo;
+      
+      if (Array.isArray(usuariosLote)) {
+        usuariosLote.forEach((user) => {
+          if (user && user.employeeNo) {
+            // Extraer información de la foto
+            let fotoPath = null;
+            if (user.faceURL) {
+              // Convertir URL absoluta a ruta relativa
+              fotoPath = user.faceURL
+                .replace(/^https?:\/\//, '')
+                .replace(/^[^\/]+\//, '') // Quitar el dominio
+                .replace(/@/g, '%40'); // Codificar @ si existe
             }
             
-            // Buscar campos que puedan ser correo o teléfono
-            console.log('🔎 BUSCANDO CAMPOS DE CORREO Y TELÉFONO:');
-            const emailLikeFields = Object.keys(firstUser).filter(key => 
-              key.toLowerCase().includes('mail') || key.toLowerCase().includes('email')
-            );
-            const phoneLikeFields = Object.keys(firstUser).filter(key => 
-              key.toLowerCase().includes('phone') || key.toLowerCase().includes('tel') || key.toLowerCase().includes('mobile')
-            );
+            // Obtener departamento basado en groupId o deptID
+            let departamento = "No asignado";
+            const grupoId = user.groupId || user.deptID;
             
-            console.log('   Campos similares a correo:', emailLikeFields);
-            console.log('   Campos similares a teléfono:', phoneLikeFields);
+            if (grupoId && DEPARTAMENTOS[grupoId]) {
+              departamento = DEPARTAMENTOS[grupoId];
+            } else if (grupoId) {
+              departamento = `Grupo ${grupoId}`;
+            }
             
-            // Mostrar valores de esos campos
-            emailLikeFields.forEach(field => {
-              console.log(`   ${field}: ${firstUser[field]}`);
-            });
-            phoneLikeFields.forEach(field => {
-              console.log(`   ${field}: ${firstUser[field]}`);
-            });
+            // Determinar género
+            let genero = "No especificado";
+            if (user.gender === 1) genero = 'Masculino';
+            else if (user.gender === 2) genero = 'Femenino';
+            
+            const usuarioTransformado = {
+              id: user.employeeNo,
+              nombre: user.name || 'Sin nombre',
+              tipoUsuario: user.userType || 'Desconocido',
+              numeroEmpleado: user.employeeNo,
+              fechaCreacion: user.createTime || 'No disponible',
+              fechaModificacion: user.modifyTime || 'No disponible',
+              estado: user.enable ? 'Activo' : 'Inactivo',
+              departamento: departamento,
+              dispositivo: deviceIp,
+              cedula: user.employeeNo,
+              genero: genero,
+              department_id: user.deptID,
+              groupId: user.groupId,
+              valid: user.Valid ? {
+                inicio: user.Valid.beginTime,
+                fin: user.Valid.endTime
+              } : undefined,
+              // Información para la foto
+              fotoPath: fotoPath || user.employeeNo,
+              fotoDeviceIp: deviceIp,
+              // Datos originales para debugging
+              _rawData: process.env.NODE_ENV === 'development' ? user : undefined
+            };
+            
+            usuariosTransformados.push(usuarioTransformado);
           }
         });
       }
     });
+  });
+
+  return usuariosTransformados;
+}
+
+export async function GET(request) {
+  try {
+    console.log('🔄 INICIANDO CONSULTA DE USUARIOS HIKVISION...');
+    
+    const multi = new MultiDeviceUserService();
+    const result = await multi.getAllUsersFromAllDevices();
+
+    // Transformar usuarios para el frontend
+    const usuariosTransformados = transformarUsuariosDesdeRaw(result.results);
+
+    // Calcular estadísticas por departamento
+    const estadisticasPorDepartamento = {};
+    usuariosTransformados.forEach(usuario => {
+      const depto = usuario.departamento;
+      estadisticasPorDepartamento[depto] = (estadisticasPorDepartamento[depto] || 0) + 1;
+    });
+
+    // Devolver datos transformados
+    const responseData = {
+      success: true,
+      message: "Usuarios obtenidos correctamente",
+      timestamp: new Date().toISOString(),
+      devices: CONFIG.deviceIp,
+      data: usuariosTransformados,
+      estadisticas: {
+        totalDevices: CONFIG.deviceIp.length,
+        successfulDevices: result.results.filter(device => !device.error).length,
+        devicesWithErrors: result.results.filter(device => device.error).length,
+        totalUsers: usuariosTransformados.length,
+        usersWithPhotoInfo: usuariosTransformados.filter(u => u.fotoPath && u.fotoPath !== u.numeroEmpleado).length,
+        porDepartamento: estadisticasPorDepartamento
+      },
+      // Para debugging, mantener raw data solo en desarrollo
+      rawData: process.env.NODE_ENV === 'development' ? result.results : undefined
+    };
+
+    console.log(`✅ CONSULTA COMPLETADA: ${usuariosTransformados.length} usuarios`);
+    console.log(`📊 Estadísticas por departamento:`, estadisticasPorDepartamento);
 
     return NextResponse.json(responseData);
 
   } catch (error) {
-    console.error('❌ ERROR EN CONSULTA RAW DE USUARIOS:', error);
+    console.error('❌ ERROR EN CONSULTA DE USUARIOS:', error);
     return NextResponse.json(
       {
         success: false,

@@ -6,7 +6,7 @@ const CONFIG = {
   username: "admin",
   password: "Tattered3483",
   devices: ["172.31.0.165", "172.31.0.164"],
-  maxResults: 30,
+  maxResults: 100,  // Aumentado de 30 a 100
   maxRetries: 10,
   requestDelay: 100,
   deviceDelay: 500
@@ -40,7 +40,7 @@ class HikvisionClient {
       }
     };
 
-    console.log(`🔍 Consultando ${this.deviceIp}: posición ${searchCondition.position}`);
+    console.log(`🔍 Consultando ${this.deviceIp}: posición ${searchCondition.position}, límite ${searchCondition.maxResults}`);
 
     try {
       const res = await this.client.fetch(this.baseUrl, {
@@ -54,7 +54,16 @@ class HikvisionClient {
         throw new Error(`Dispositivo ${this.deviceIp} - Error ${res.status}: ${errorText}`);
       }
 
-      return await res.json();
+      const data = await res.json();
+
+      // DEBUG: Ver estructura de respuesta
+      console.log(`📊 ${this.deviceIp} respuesta:`, {
+        listaEventos: data?.AcsEvent?.InfoList?.length || 0,
+        totalMatches: data?.AcsEvent?.totalMatches,
+        numOfMatches: data?.AcsEvent?.numOfMatches
+      });
+
+      return data;
     } catch (error) {
       console.error(`❌ Error en fetchEvents ${this.deviceIp}:`, error.message);
       throw error;
@@ -72,9 +81,17 @@ class RangeQueryService {
     let eventos = [];
     let position = 0;
     let intento = 1;
+    let totalObtenidos = 0;
 
-    while (intento <= CONFIG.maxRetries) {
-      const searchCondition = { tag, position, maxResults: CONFIG.maxResults, startTime, endTime };
+    // Aumentar intentos para obtener más eventos
+    while (intento <= 30) {  // Máximo 30 intentos = 3000 eventos (100 × 30)
+      const searchCondition = {
+        tag: `${tag}_${intento}`,
+        position,
+        maxResults: CONFIG.maxResults,
+        startTime,
+        endTime
+      };
 
       try {
         console.log(`📡 ${this.client.deviceIp}: Lote ${intento}, posición ${position}`);
@@ -84,23 +101,27 @@ class RangeQueryService {
         console.log(`📨 ${this.client.deviceIp}: Lote ${intento} → ${eventosLote.length} eventos`);
 
         if (eventosLote.length === 0) {
-          console.log(`✅ ${this.client.deviceIp}: No hay más eventos`);
+          console.log(`✅ ${this.client.deviceIp}: No hay más eventos después de ${totalObtenidos} obtenidos`);
           break;
         }
 
+        // Agregar eventos con información del dispositivo
         eventos.push(...eventosLote.map(evento => ({
           ...evento,
           dispositivo: this.client.deviceIp
         })));
 
+        totalObtenidos += eventosLote.length;
         position += eventosLote.length;
         intento++;
 
+        // Si obtenemos menos de maxResults, probablemente es el último lote
         if (eventosLote.length < CONFIG.maxResults) {
-          console.log(`✅ ${this.client.deviceIp}: Lote incompleto, fin de datos`);
+          console.log(`✅ ${this.client.deviceIp}: Lote incompleto, fin de datos (${totalObtenidos} total)`);
           break;
         }
 
+        // Pequeña pausa
         await delay(CONFIG.requestDelay);
 
       } catch (error) {
@@ -157,44 +178,179 @@ class TimePeriodService {
       tag: '30dias'
     };
   }
+
+  getLastWeekRange() {
+    const today = new Date();
+
+    // Obtener día de la semana (0 = domingo, 1 = lunes...)
+    const day = today.getDay();
+
+    // Calcular lunes de esta semana
+    const mondayThisWeek = new Date(today);
+    mondayThisWeek.setDate(today.getDate() - (day === 0 ? 6 : day - 1));
+    mondayThisWeek.setHours(0, 0, 0, 0);
+
+    // Lunes de la semana pasada
+    const mondayLastWeek = new Date(mondayThisWeek);
+    mondayLastWeek.setDate(mondayThisWeek.getDate() - 7);
+
+    // Domingo de la semana pasada
+    const sundayLastWeek = new Date(mondayLastWeek);
+    sundayLastWeek.setDate(mondayLastWeek.getDate() + 6);
+    sundayLastWeek.setHours(23, 59, 59, 999);
+
+    return {
+      startTime: formatHikvisionDate(mondayLastWeek),
+      endTime: formatHikvisionDate(sundayLastWeek),
+      tag: "semana_pasada"
+    };
+  }
+
 }
 
-// Procesador de eventos
+// Procesador de eventos - VERSIÓN MEJORADA
 class EventProcessor {
+  static corregirZonaHoraria(evento) {
+    if (!evento.time) return evento.time;
+
+    try {
+      let fecha = new Date(evento.time);
+
+      // Dispositivo 164 está en +08:00 (Malasia) pero debería ser -05:00 (Colombia)
+      if (evento.dispositivo === '172.31.0.164') {
+        // Convertir de +08:00 a -05:00 = restar 13 horas
+        fecha.setHours(fecha.getHours() - 13);
+
+        const original = evento.time;
+        const corregido = fecha.toISOString();
+
+        // Solo loguear algunos para no saturar
+        if (Math.random() < 0.1) { // 10% de los eventos
+          console.log(`🕒 ${evento.dispositivo}: ${original.split('T')[1]?.substring(0, 8)} → ${corregido.split('T')[1]?.substring(0, 8)}`);
+        }
+
+        return corregido;
+      }
+
+      return evento.time;
+
+    } catch (error) {
+      console.log(`⚠️ Error corrigiendo zona horaria: ${evento.time}`, error.message);
+      return evento.time;
+    }
+  }
+
+  static extraerDocumento(evento) {
+    // Prioridad 1: employeeNoString
+    if (evento.employeeNoString && evento.employeeNoString.trim() !== '' && evento.employeeNoString !== 'N/A') {
+      return evento.employeeNoString.trim();
+    }
+
+    // Prioridad 2: cardNo  
+    if (evento.cardNo && evento.cardNo.trim() !== '') {
+      return evento.cardNo.trim();
+    }
+
+    // Prioridad 3: Si tiene nombre, crear documento temporal
+    if (evento.name && evento.name !== 'Sin nombre' && evento.name.trim() !== '') {
+      // Crear hash simple del nombre
+      const nombreHash = Buffer.from(evento.name).toString('hex').substring(0, 12);
+      return `temp_${nombreHash}`;
+    }
+
+    // Prioridad 4: Usar hora como identificador único
+    if (evento.time) {
+      const horaNumeros = evento.time.replace(/[^0-9]/g, '').substring(0, 14);
+      return `hora_${horaNumeros}`;
+    }
+
+    // Último recurso: dispositivo + índice
+    return `evento_${evento.dispositivo || 'desconocido'}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  static determinarTipoEvento(evento) {
+    if (evento.label) {
+      const labelLower = evento.label.toLowerCase();
+      if (labelLower.includes('salida')) return 'Solo Salida';
+      if (labelLower.includes('entrada')) return 'Solo Entrada';
+    }
+
+    // Por defecto, asumir entrada para eventos de marcación
+    return 'Solo Entrada';
+  }
+
+  static extraerHoraSimple(timestamp) {
+    if (!timestamp) return null;
+
+    try {
+      const fecha = new Date(timestamp);
+      if (isNaN(fecha.getTime())) return null;
+
+      const horas = fecha.getHours().toString().padStart(2, '0');
+      const minutos = fecha.getMinutes().toString().padStart(2, '0');
+      const segundos = fecha.getSeconds().toString().padStart(2, '0');
+
+      return `${horas}:${minutos}:${segundos}`;
+    } catch (error) {
+      console.log('⚠️ Error extrayendo hora:', error.message);
+      return null;
+    }
+  }
+
   static processEvents(eventos, startTime, endTime) {
-    console.log(`📊 Procesando ${eventos.length} eventos`);
+    console.log(`📊 Procesando ${eventos.length} eventos brutos`);
 
-    const eventosConNombre = eventos.filter(evento => {
-      const tieneNombre = evento.name && evento.name !== 'Sin nombre' && evento.name.trim() !== '';
-      return tieneNombre;
-    });
+    // Estadísticas detalladas
+    const conEmployeeNo = eventos.filter(e => e.employeeNoString && e.employeeNoString.trim() !== '').length;
+    const conCardNo = eventos.filter(e => e.cardNo && e.cardNo.trim() !== '').length;
+    const conNombre = eventos.filter(e => e.name && e.name !== 'Sin nombre' && e.name.trim() !== '').length;
+    const sinIdentificacion = eventos.filter(e =>
+      !e.employeeNoString && !e.cardNo && (!e.name || e.name === 'Sin nombre')
+    ).length;
 
-    console.log(`🔍 Filtrado por nombre: ${eventos.length} eventos → ${eventosConNombre.length} eventos con nombre`);
+    console.log(`📈 Estadísticas detalladas:`);
+    console.log(`   - Con employeeNo: ${conEmployeeNo}`);
+    console.log(`   - Con cardNo: ${conCardNo}`);
+    console.log(`   - Con nombre: ${conNombre}`);
+    console.log(`   - Sin identificación: ${sinIdentificacion}`);
 
-    const eventosEnRango = eventosConNombre.filter(evento => {
-      const fechaEvento = new Date(evento.time);
-      const fechaInicio = new Date(startTime);
-      const fechaFin = new Date(endTime);
-
-      return fechaEvento >= fechaInicio && fechaEvento <= fechaFin;
-    });
-
-    console.log(`📅 Filtrado por fecha: ${eventosConNombre.length} eventos → ${eventosEnRango.length} eventos en rango`);
-
-    return eventosEnRango.map(evento => {
-      const fechaObj = new Date(evento.time);
+    // Procesar TODOS los eventos
+    const eventosProcesados = eventos.map(evento => {
+      const horaCorregida = this.corregirZonaHoraria(evento);
+      const fechaObj = new Date(horaCorregida);
+      const documento = this.extraerDocumento(evento);
+      const tipo = this.determinarTipoEvento(evento);
+      const horaSimple = this.extraerHoraSimple(horaCorregida);
 
       return {
-        empleadoId: evento.employeeNoString || 'Sin documento',
-        nombre: evento.name,
-        hora: evento.time,
+        empleadoId: documento,
+        nombre: evento.name || 'Sin nombre',
+        hora: horaSimple,  // ← Enviar hora simple (HH:MM:SS)
+        horaCompleta: horaCorregida,  // ← Mantener timestamp completo también
         fecha: fechaObj.toISOString().split('T')[0],
         campaña: evento.department || 'Sin grupo',
-        tipo: evento.label || 'Evento',
+        tipo: tipo,
         foto: evento.pictureURL || '',
-        dispositivo: evento.dispositivo || 'Desconocido'
+        dispositivo: evento.dispositivo || 'Desconocido',
+        tieneDocumentoReal: !!(evento.employeeNoString || evento.cardNo)
       };
-    }).sort((a, b) => new Date(b.hora).getTime() - new Date(a.hora).getTime());
+    });
+
+    console.log(`✅ Procesados ${eventosProcesados.length} eventos para BD`);
+
+    // Mostrar algunos ejemplos
+    if (eventosProcesados.length > 0) {
+      console.log(`📋 Ejemplos procesados:`);
+      eventosProcesados.slice(0, 3).forEach((e, i) => {
+        console.log(`   ${i + 1}. Doc: ${e.empleadoId.substring(0, 15)}..., Nombre: ${e.nombre.substring(0, 20)}..., Hora: ${e.hora}, Tipo: ${e.tipo}`);
+      });
+    }
+
+    return eventosProcesados.sort((a, b) => {
+      const fechaA = new Date(a.horaCompleta || a.hora);
+      const fechaB = new Date(b.horaCompleta || b.hora);
+      return fechaB.getTime() - fechaA.getTime();
+    });
   }
 }
 
@@ -228,6 +384,11 @@ class BiometricService {
       case 'hoy':
       default:
         timeRange = timeService.getTodayRange();
+
+      case 'semana_pasada':
+        timeRange = timeService.getLastWeekRange();
+        break;
+
     }
 
     console.log(`🎯 Consultando con rango: ${timeRange.startTime} a ${timeRange.endTime}`);
@@ -263,7 +424,7 @@ class BiometricService {
 
     console.log(`\n📈 RESUMEN CONSULTA BIOMÉTRICA:`);
     console.log(`   - Total eventos brutos: ${allEvents.length}`);
-    console.log(`   - Eventos con nombre: ${eventosProcesados.length}`);
+    console.log(`   - Eventos procesados para BD: ${eventosProcesados.length}`);
     console.log(`   - Dispositivos con error: ${errors.length}`);
 
     return {
@@ -273,7 +434,7 @@ class BiometricService {
       dispositivos_consultados: CONFIG.devices,
       estadisticas: {
         total_eventos_brutos: allEvents.length,
-        total_eventos_con_nombre: eventosProcesados.length,
+        total_eventos_procesados: eventosProcesados.length,
         dispositivos_exitosos: CONFIG.devices.length - errors.length,
         dispositivos_con_error: errors.length
       }
@@ -309,11 +470,13 @@ export async function GET(request) {
 
     const result = await biometricService.queryAllDevices(rango, fechaInicio, fechaFin);
 
+    console.log(`\n✅ CONSULTA COMPLETADA: ${result.eventos.length} eventos procesados obtenidos`);
+
     const response = {
       success: true,
       rango_utilizado: result.timeRange.tag,
       dispositivos_consultados: CONFIG.devices,
-      total_eventos: result.estadisticas.total_eventos_con_nombre,
+      total_eventos: result.estadisticas.total_eventos_procesados,
       eventos: result.eventos
     };
 
@@ -322,7 +485,6 @@ export async function GET(request) {
       response.advertencia = 'Algunos dispositivos presentaron errores';
     }
 
-    console.log(`\n✅ CONSULTA COMPLETADA: ${result.eventos.length} eventos con nombre obtenidos`);
     return NextResponse.json(response);
 
   } catch (error) {
@@ -335,16 +497,4 @@ export async function GET(request) {
       { status: 500 }
     );
   }
-}
-
-export async function POST() {
-  return NextResponse.json({ error: 'Método no implementado' }, { status: 405 });
-}
-
-export async function PUT() {
-  return NextResponse.json({ error: 'Método no implementado' }, { status: 405 });
-}
-
-export async function DELETE() {
-  return NextResponse.json({ error: 'Método no implementado' }, { status: 405 });
 }

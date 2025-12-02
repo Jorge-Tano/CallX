@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import  PageTransition  from "@components/PageTransition";
 import "./globals.css";
 
 
@@ -28,10 +29,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
 
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        
-        <main className="mt-4">{children}</main>
-      </body>
+       <body
+          className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+          {/* Contenedor para animación */}
+          <div id="page-container">{children}</div>
+        </body>
     </html>
   );
 }
