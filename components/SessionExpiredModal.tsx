@@ -11,14 +11,10 @@ export default function SessionExpiredModalSimple() {
 
   useEffect(() => {
     // Debug: Ver qué parámetros hay
-    console.log('🔍 Modal: searchParams:', {
-      expired: searchParams.get('expired'),
-      allParams: Object.fromEntries(searchParams.entries())
-    });
+    
     
     // Debug: Ver localStorage
-    console.log('🔍 Modal: localStorage sessionExpiredByInactivity:', 
-      localStorage.getItem('sessionExpiredByInactivity'));
+    
     
     const expiredParam = searchParams.get('expired');
     const wasExpiredByInactivity = localStorage.getItem('sessionExpiredByInactivity');

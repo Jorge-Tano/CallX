@@ -69,8 +69,6 @@ export default function UsuarioEdit({
         estado: form.estado || "Activo"
       };
 
-      console.log('📤 Enviando datos de edición:', datosParaEnviar);
-
       // Validar campos requeridos
       if (!datosParaEnviar.employeeNo || !datosParaEnviar.nombre) {
         alert("El número de empleado y el nombre son campos requeridos");
@@ -88,7 +86,6 @@ export default function UsuarioEdit({
       });
 
       const result = await response.json();
-      console.log('📥 Respuesta del endpoint:', result);
 
       if (!result.success) {
         // Si hay errores específicos de dispositivos
@@ -197,7 +194,7 @@ export default function UsuarioEdit({
                 value={form.nombre || ""}
                 onChange={handleChange}
                 className="w-full border border-gray-300 placeholder-gray-400 text-gray-800 p-3 rounded-lg
-                         focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition duration-200"
+                        focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition duration-200"
                 required
                 disabled={loading}
               />

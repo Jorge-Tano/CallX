@@ -109,10 +109,9 @@ export default function Navbar() {
     setOpen(false);
     
     try {
-      console.log("🚀 Iniciando logout seguro...");
+      
       
       // PASO 1: Redirigir inmediatamente a login (usuario ya no ve la página)
-      console.log("🔄 Redirigiendo a página de login...");
       window.location.href = '/';
       
       // PASO 2: Limpiar datos locales inmediatamente (pero después de redirigir)
@@ -173,7 +172,7 @@ export default function Navbar() {
     setOpen(false);
     
     try {
-      console.log("🚀 Logout simple - Redirigiendo inmediatamente");
+      
       
       // 1. Limpiar datos locales VISIBLES (los esenciales)
       clearLocalAuthData();

@@ -81,16 +81,7 @@ export function useHideFrom() {
   
   // DEBUG detallado
   useEffect(() => {
-    console.log('🔍 useHideFrom - Estado de sesión:', {
-      status,
-      tieneSession: !!session,
-      sessionCompleta: session,
-      user: session?.user,
-      campanaOriginal: (session?.user as any)?.campana,
-      campanaNormalizada: normalizarCampana((session?.user as any)?.campana),
-      esCampanaVentas: esCampanaVentas((session?.user as any)?.campana),
-      departamentosTeamLeader: obtenerDepartamentosTeamLeader((session?.user as any)?.campana)
-    })
+    
   }, [session, status])
   
   const userData = session?.user as any
@@ -116,14 +107,7 @@ export function useHideFrom() {
   
   // 🔥 FUNCIÓN PARA DEBUG: Forzar actualización de sesión
   const refreshSession = async () => {
-    console.log('🔄 Forzando actualización de sesión...')
-    console.log('📤 Datos antes de update:', { 
-      userCampaignRaw, 
-      userCampaign,
-      esTeamLeaderVentas,
-      userCampaigns,
-      userDepartments 
-    })
+    
     await update()
   }
   
@@ -139,14 +123,7 @@ export function useHideFrom() {
     const hideArray = Array.isArray(rolesToHide) ? rolesToHide : [rolesToHide]
     const shouldHideResult = hideArray.includes(userRole)
     
-    console.log('🎯 shouldHide calculado:', {
-      userRole,
-      rolesToHide,
-      shouldHideResult,
-      esTeamLeaderVentas,
-      userCampaigns,
-      userDepartments
-    })
+    
     
     return shouldHideResult
   }
@@ -187,17 +164,7 @@ export function useHideFrom() {
   }): React.ReactNode => {
     const hide = shouldHide(from)
     
-    console.log('🎯 Componente Hide:', {
-      from,
-      hide,
-      inverse,
-      userRole,
-      userCampaign,
-      userCampaignRaw,
-      esTeamLeaderVentas,
-      userCampaigns,
-      userDepartments
-    })
+    
     
     if (inverse) {
       return hide ? children : fallback

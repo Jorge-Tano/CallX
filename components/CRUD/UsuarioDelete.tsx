@@ -62,7 +62,6 @@ export default function UsuarioDeleteReal({
 
   // Función para eliminar de la base de datos
   const deleteFromDatabase = async (employeeNo: string): Promise<DatabaseResult> => {
-    console.log(`🗄️ Intentando eliminar usuario ${employeeNo} de la base de datos...`);
     
     try {
       const response = await fetch('/api/database/users/delete', {
@@ -110,7 +109,6 @@ export default function UsuarioDeleteReal({
         throw new Error("El usuario no tiene un número de empleado válido");
       }
 
-      console.log(`🔴 SOLICITUD DE ELIMINACIÓN REAL PARA: ${employeeNo}`);
       
       // 1. Primero eliminar de dispositivos Hikvision
       const hikvisionResponse = await fetch('/api/hikvision/users/delete', {

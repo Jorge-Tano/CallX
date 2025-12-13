@@ -74,8 +74,6 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
         ...form
       };
 
-      // 🔴 PASO 1: Crear en Hikvision (endpoint existente)
-      console.log('🔄 Creando usuario en Hikvision...');
       const response = await fetch('/api/hikvision/users/create', {
         method: 'POST',
         headers: {
@@ -95,9 +93,7 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
         throw new Error(`Error en creación:\n${errorDetails}`);
       }
 
-      // 🟢 PASO 2: Sincronizar automáticamente con la base de datos
-      console.log('✅ Usuario creado en Hikvision. Sincronizando con BD...');
-      
+            
       // Usar el endpoint unificado para sincronizar
       try {
         const syncResponse = await fetch('/api/users', {

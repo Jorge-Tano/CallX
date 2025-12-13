@@ -75,20 +75,10 @@ export default function EventosPage() {
       const data = await response.json();
 
       if (data.success && data.eventos) {
-        console.log('✅ Eventos cargados:', data.eventos.length);
         
         // Verificar estructura de datos
-        if (data.eventos.length > 0) {
-          console.log('📊 Ejemplo de evento:', {
-            id: data.eventos[0].empleadoId,
-            nombre: data.eventos[0].nombre,
-            campaña: data.eventos[0].campaña,
-            campañaOriginal: data.eventos[0].campañaOriginal
-          });
-          
-          // Mostrar campañas únicas
+        if (data.eventos.length > 0) {          
           const campañasUnicas = [...new Set(data.eventos.map((e: Evento) => e.campaña))];
-          console.log('📊 Campañas únicas encontradas:', campañasUnicas);
         }
 
         setEventos(data.eventos);
@@ -126,13 +116,12 @@ export default function EventosPage() {
   // Aplicar filtro por departamento/campaña
   const aplicarFiltro = useCallback((eventosLista: Evento[], filtro: string | null) => {
     if (!filtro || filtro === 'Todos' || filtro === 'todos') {
-      console.log('📊 Mostrando TODOS los eventos');
+      
       setEventosFiltrados(eventosLista);
       return;
     }
     
     const filtroNormalizado = normalizarString(filtro);
-    console.log('🔍 Buscando campaña:', filtro, 'Normalizado:', filtroNormalizado);
     
     const filtrados = eventosLista.filter(evento => {
       const campañaEvento = evento.campaña || 'Sin grupo';
@@ -141,25 +130,17 @@ export default function EventosPage() {
       const coincide = campañaNormalizada === filtroNormalizado;
       
       if (coincide) {
-        console.log('✅ Coincidencia encontrada:', {
-          empleado: evento.nombre,
-          campañaOriginal: campañaEvento,
-          filtroBuscado: filtro
-        });
+        
       }
       
       return coincide;
     });
     
-    console.log(`📊 Filtro "${filtro}": ${filtrados.length} de ${eventosLista.length} eventos`);
     setEventosFiltrados(filtrados);
   }, []);
 
   // Handler para cambiar filtro
-  const handleFiltroDepartamento = useCallback((nuevoFiltro: string | null) => {
-    console.log('🔄 Cambiando filtro de', departamentoFiltro, 'a', nuevoFiltro);
-    
-    // Guardar en localStorage
+  const handleFiltroDepartamento = useCallback((nuevoFiltro: string | null) => {    
     if (nuevoFiltro && nuevoFiltro !== 'Todos') {
       localStorage.setItem('departamentoFiltro', nuevoFiltro);
     } else {
@@ -199,7 +180,6 @@ export default function EventosPage() {
       }
       
       descargarExcel(eventosFiltrados, filtroInfo);
-      console.log(`✅ Excel descargado con ${eventosFiltrados.length} eventos`);
     } catch (error) {
       console.error('Error al descargar Excel:', error);
       alert('Error al generar el archivo Excel. Por favor, intente nuevamente.');

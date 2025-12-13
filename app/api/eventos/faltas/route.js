@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Client } from 'pg';
 
-// Configuración de PostgreSQL
 const DB_CONFIG = {
   host: process.env.DB_HOST || '127.0.0.1',
   port: parseInt(process.env.DB_PORT || '5432'),
@@ -10,7 +9,6 @@ const DB_CONFIG = {
   password: process.env.DB_PASSWORD || 'OnePiece00.'
 };
 
-// Lista completa de subtipos que indican faltas (CON ALMUERZOS)
 const SUBTIPOS_FALTAS = [
   'Jornada completa',
   'Sin almuerzo registrado',
@@ -31,7 +29,6 @@ const SUBTIPOS_FALTAS = [
   'Falta salida almuerzo'
 ];
 
-// Mapeo de subtipos a categorías de problema (MEJORADO)
 const CATEGORIAS_PROBLEMA = {
   'Jornada completa': 'COMPLETO',
   'Sin almuerzo registrado': 'ALMUERZO_INCOMPLETO',
@@ -52,7 +49,6 @@ const CATEGORIAS_PROBLEMA = {
   'Falta salida almuerzo': 'FALTA_SALIDA_ALMUERZO'
 };
 
-// Niveles de gravedad (ACTUALIZADO)
 const GRAVEDAD = {
   'COMPLETO': 'NINGUNA',
   'ERROR_DATOS': 'ALTA',
@@ -67,7 +63,6 @@ const GRAVEDAD = {
   'FALTA_SALIDA_ALMUERZO': 'MEDIA'
 };
 
-// Función para analizar el almuerzo
 const analizarAlmuerzo = (horaSalidaAlmuerzo, horaEntradaAlmuerzo) => {
   if (!horaSalidaAlmuerzo && !horaEntradaAlmuerzo) {
     return {
@@ -140,8 +135,6 @@ const analizarAlmuerzo = (horaSalidaAlmuerzo, horaEntradaAlmuerzo) => {
 };
 
 export async function GET(request) {
-  console.log('📋 [FALTAS] Consultando registros con almuerzos...');
-  
   const { searchParams } = new URL(request.url);
   const fecha = searchParams.get('fecha') || new Date().toISOString().split('T')[0];
   const categoria = searchParams.get('categoria');
@@ -153,9 +146,7 @@ export async function GET(request) {
   
   try {
     await client.connect();
-    console.log(`📅 [FALTAS] Consultando fecha: ${fecha}`);
     
-    // Construir consulta SQL dinámica (INCLUYENDO ALMUERZOS)
     let query = `
       SELECT 
         documento,
@@ -166,7 +157,6 @@ export async function GET(request) {
         hora_salida_almuerzo,
         hora_entrada_almuerzo,
         dispositivo_ip,
-        imagen,
         created_at,
         tipo_evento
       FROM eventos_procesados 
@@ -175,14 +165,11 @@ export async function GET(request) {
     
     const queryParams = [fecha];
     
-    // Agregar filtros según parámetros
     if (!incluirCompletos) {
       query += ` AND subtipo_evento != 'Jornada completa'`;
     }
     
-    // Filtrar por subtipos específicos si se solicita
     if (categoria) {
-      // Convertir categoría a subtipos correspondientes
       const subtiposFiltro = Object.entries(CATEGORIAS_PROBLEMA)
         .filter(([subtipo, cat]) => cat === categoria)
         .map(([subtipo]) => subtipo);
@@ -193,7 +180,6 @@ export async function GET(request) {
       }
     }
     
-    // Ordenar y limitar
     query += ` ORDER BY 
       CASE 
         WHEN subtipo_evento = 'ERROR - Misma hora' THEN 1
@@ -216,22 +202,18 @@ export async function GET(request) {
     queryParams.push(limite);
     
     const result = await client.query(query, queryParams);
-    console.log(`✅ [FALTAS] ${result.rows.length} registros encontrados`);
     
-    // Inicializar estructura para agrupar faltas
     const faltasPorTipo = {};
     SUBTIPOS_FALTAS.forEach(subtipo => {
       faltasPorTipo[subtipo] = [];
     });
     
-    // Procesar cada registro CON ANÁLISIS DE ALMUERZOS
     const todosRegistros = [];
     
     result.rows.forEach(row => {
       const categoriaProblema = CATEGORIAS_PROBLEMA[row.subtipo_evento] || 'DESCONOCIDO';
       const nivelGravedad = GRAVEDAD[categoriaProblema] || 'BAJA';
       
-      // Analizar el almuerzo
       const analisisAlmuerzo = analizarAlmuerzo(
         row.hora_salida_almuerzo,
         row.hora_entrada_almuerzo
@@ -262,11 +244,9 @@ export async function GET(request) {
       
       todosRegistros.push(registro);
       
-      // Agrupar por subtipo si existe en nuestra lista
       if (faltasPorTipo[row.subtipo_evento]) {
         faltasPorTipo[row.subtipo_evento].push(registro);
       } else if (!incluirCompletos) {
-        // Si no está en la lista pero no es jornada completa, agregar a "Otros"
         if (!faltasPorTipo['Otros']) {
           faltasPorTipo['Otros'] = [];
         }
@@ -274,7 +254,6 @@ export async function GET(request) {
       }
     });
     
-    // Calcular estadísticas (INCLUYENDO ALMUERZOS)
     const estadisticas = {
       totalRegistros: result.rows.length,
       porSubtipo: {},
@@ -295,18 +274,11 @@ export async function GET(request) {
       }
     };
     
-    // Contar por subtipo, categoría y almuerzos
     todosRegistros.forEach(registro => {
-      // Por subtipo
       estadisticas.porSubtipo[registro.subtipo] = (estadisticas.porSubtipo[registro.subtipo] || 0) + 1;
-      
-      // Por categoría
       estadisticas.porCategoria[registro.categoria] = (estadisticas.porCategoria[registro.categoria] || 0) + 1;
-      
-      // Por gravedad
       estadisticas.porGravedad[registro.gravedad] = (estadisticas.porGravedad[registro.gravedad] || 0) + 1;
       
-      // Estadísticas de almuerzos
       switch (registro.almuerzo.estado) {
         case 'NORMAL':
           estadisticas.almuerzos.normales++;
@@ -330,7 +302,6 @@ export async function GET(request) {
       }
     });
     
-    // Preparar resumen por tipo
     const resumenPorTipo = Object.entries(faltasPorTipo)
       .filter(([tipo, lista]) => lista.length > 0)
       .map(([tipo, lista]) => {
@@ -350,7 +321,6 @@ export async function GET(request) {
         };
       })
       .sort((a, b) => {
-        // Ordenar por gravedad (ALTA primero) luego por cantidad
         const ordenGravedad = { ALTA: 1, MEDIA: 2, BAJA: 3, NINGUNA: 4 };
         if (ordenGravedad[a.gravedad] !== ordenGravedad[b.gravedad]) {
           return ordenGravedad[a.gravedad] - ordenGravedad[b.gravedad];
@@ -358,7 +328,6 @@ export async function GET(request) {
         return b.cantidad - a.cantidad;
       });
     
-    // Determinar recomendaciones basadas en los datos (INCLUYENDO ALMUERZOS)
     const recomendaciones = [];
     
     if (estadisticas.porGravedad.ALTA > 0) {
@@ -401,7 +370,6 @@ export async function GET(request) {
       });
     }
     
-    // Si no hay faltas
     if (result.rows.length === 0 && !incluirCompletos) {
       recomendaciones.push({
         tipo: 'EXCELENTE',
@@ -443,12 +411,9 @@ export async function GET(request) {
     });
     
   } catch (error) {
-    console.error('❌ [FALTAS] Error:', error.message);
-    
     return NextResponse.json({
       success: false,
       error: error.message,
-      recomendacion: 'Verifica: 1) PostgreSQL activo, 2) Tabla existe, 3) Fecha en formato YYYY-MM-DD',
       fecha: fecha,
       estadisticas: null,
       resumen: [],
@@ -458,13 +423,10 @@ export async function GET(request) {
   } finally {
     if (client) {
       await client.end();
-      console.log('🔌 [FALTAS] Conexión cerrada');
     }
   }
 }
 
-// También soportamos POST
 export async function POST(request) {
-  console.log('📨 [FALTAS] Recibiendo solicitud POST...');
   return await GET(request);
 }

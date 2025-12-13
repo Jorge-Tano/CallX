@@ -40,18 +40,7 @@ export default function UsuariosPage() {
   
   // DEBUG: Ver qué datos tenemos
   useEffect(() => {
-    console.log("🔍 DEBUG Página Usuarios:", {
-      userRole,
-      userCampaign,
-      userCampaignRaw,
-      userDepartments,
-      esTeamLeaderVentas,
-      userName,
-      loadingUser,
-      isTeamLeader,
-      isGlobalAccess,
-      departamentoFiltro
-    });
+    
   }, [userRole, userCampaign, userCampaignRaw, userDepartments, esTeamLeaderVentas, userName, loadingUser, isTeamLeader, isGlobalAccess, departamentoFiltro]);
 
   // Cargar usuarios (solo una vez al inicio)
@@ -60,12 +49,10 @@ export default function UsuariosPage() {
       setCargando(true);
       setError(null);
 
-      console.log('🔍 Cargando todos los usuarios...');
+      
       
       // SIEMPRE cargar todos los usuarios sin filtro inicial
       const url = '/api/users/bd?limit=1000';
-      
-      console.log('🔍 Llamando endpoint:', url);
 
       const response = await fetch(url, {
         credentials: 'include',
@@ -78,11 +65,6 @@ export default function UsuariosPage() {
       
       const data = await response.json();
       
-      console.log('🔍 Respuesta del endpoint:', {
-        success: data.success,
-        metadata: data.metadata,
-        totalUsuarios: data.data?.length
-      });
       
       if (data.success) {
         const usuariosFormateados = (data.data || []).map((user: any) => ({
@@ -122,7 +104,6 @@ export default function UsuariosPage() {
     if (!departamentoFiltro) {
       // Si es Team Leader sin filtro explícito, aplicar filtro por sus departamentos
       if (isTeamLeader && userDepartments && userDepartments.length > 0) {
-        console.log('🔍 Aplicando filtro automático para Team Leader:', userDepartments);
         return usuarios.filter(usuario => 
           userDepartments.includes(usuario.departamento || '')
         );
@@ -131,18 +112,12 @@ export default function UsuariosPage() {
     }
     
     // Aplicar filtro específico
-    console.log('🔍 Aplicando filtro específico:', departamentoFiltro);
     return usuarios.filter(usuario => usuario.departamento === departamentoFiltro);
   }, [usuarios, departamentoFiltro, isTeamLeader, userDepartments]);
 
   // Aplicar filtro por departamento - SIN RECARGAR PÁGINA
   const aplicarFiltroDepartamento = (departamento: string | null) => {
-    console.log('🔍 Cambiando filtro:', {
-      departamento,
-      isTeamLeader,
-      isGlobalAccess,
-      departamentoActual: departamentoFiltro
-    });
+    
     
     // Solo TI/Admin pueden cambiar filtros manualmente
     if (isTeamLeader && departamento !== null) {
@@ -161,7 +136,6 @@ export default function UsuariosPage() {
 
   // Botón para forzar recarga de datos
   const handleRefreshData = async () => {
-    console.log('🔄 Recargando datos...');
     await cargarUsuarios();
   };
 
@@ -170,9 +144,6 @@ export default function UsuariosPage() {
   // Función para actualizar usuario - SIMPLIFICADA
   const actualizarUsuario = async (usuarioActualizado: Usuario) => {
     try {
-      console.log('📝 Solicitud de edición recibida');
-      // El componente UsuarioEdit manejará la API y recargará la página
-      // Esta función solo cierra el modal en la página
       setUsuarioEditando(null);
     } catch (error) {
       console.error('Error en actualización:', error);
@@ -182,8 +153,6 @@ export default function UsuariosPage() {
   // Función para eliminar usuario - SIMPLIFICADA
   const eliminarUsuario = async (deletedEmployeeNo: string) => {
     try {
-      console.log(`🗑️ Eliminación completada para: ${deletedEmployeeNo}`);
-      // El componente UsuarioDeleteReal ya recargará la página
       setUsuarioAEliminar(null);
     } catch (error) {
       console.error('Error al procesar eliminación:', error);
@@ -193,8 +162,6 @@ export default function UsuariosPage() {
   // Función para crear usuario - ACTUALIZADA PARA RECARGAR
   const crearUsuario = async (nuevoUsuario: Usuario) => {
     try {
-      console.log('👤 Usuario creado, recargando datos...');
-      // Recargar la página para mostrar el nuevo usuario
       setTimeout(() => {
         window.location.reload();
       }, 1500);
