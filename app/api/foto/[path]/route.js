@@ -48,14 +48,11 @@ export async function GET(request, { params }) {
             'Accept': 'image/jpeg,image/png,*/*'
           }
         });
-        
-        console.log(`📊 Status: ${response.status}`);
-        
+                
         if (response.ok) {
           const imageBuffer = await response.arrayBuffer();
           
           if (imageBuffer.byteLength > 100) { // Mínimo 100 bytes para ser imagen
-            console.log(`✅ Foto obtenida (${imageBuffer.byteLength} bytes)`);
             
             // Detectar tipo de imagen
             const firstBytes = new Uint8Array(imageBuffer.slice(0, 4));

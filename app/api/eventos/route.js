@@ -13,10 +13,8 @@ export async function GET() {
 
     // Log solo en desarrollo
     if (process.env.NODE_ENV === 'development') {
-      console.log(`[API] Eventos obtenidos: ${eventos.length} en ${duration}s`);
       
       const eventosAlmuerzo = eventos.filter(e => e.tipo?.includes('Almuerzo'));
-      console.log(`[API] Eventos almuerzo: ${eventosAlmuerzo.length}`);
     }
 
     return NextResponse.json({
@@ -40,11 +38,10 @@ export async function GET() {
 
   } catch (error) {
     // Log de error estructurado
-    console.error(`[API Error] ${new Date().toISOString()} - ${error.message}`);
     
     return NextResponse.json({
       success: false,
-      error: process.env.NODE_ENV === 'production' 
+      error: process.env.NODE_ENV === 'production'
         ? 'Error interno del servidor' 
         : error.message,
       timestamp: new Date().toISOString()

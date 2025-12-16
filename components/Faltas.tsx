@@ -271,7 +271,6 @@ export default function Faltas({
                     
                     setFecha(nuevaFecha);
                   }}
-                  disabled={cargando || mostrarSoloHoy}
                   className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-lg text-base focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                   max={getFechaAyer()} // Máximo: ayer (no permite hoy ni futuras)
                 />
