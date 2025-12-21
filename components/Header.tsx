@@ -38,8 +38,8 @@ export function HeaderEventos({
   const [localFechaInicio, setLocalFechaInicio] = useState(fechaInicio);
   const [localFechaFin, setLocalFechaFin] = useState(fechaFin);
   const [isSincronizando, setIsSincronizando] = useState(false);
-  const [syncResult, setSyncResult] = useState<{success?: boolean; message?: string; eventos_obtenidos?: number; registros_procesados?: number; tiempo_segundos?: number} | null>(null);
-  
+  const [syncResult, setSyncResult] = useState<{ success?: boolean; message?: string; eventos_obtenidos?: number; registros_procesados?: number; tiempo_segundos?: number } | null>(null);
+
   // Estados para el modal de sincronización con DatePicker
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [startDate, setStartDate] = useState<Date | null>(new Date());
@@ -95,7 +95,7 @@ export function HeaderEventos({
     setEndDate(update[1]);
   };
 
-  // Función para ejecutar la sincronización
+  // En Header.tsx, en la función handleExecuteSync:
   const handleExecuteSync = async () => {
     if (!startDate || !endDate) {
       alert('⚠️ Por favor selecciona un rango de fechas válido');
@@ -110,11 +110,26 @@ export function HeaderEventos({
     handleCloseSyncModal();
 
     try {
-      const url = `/api/eventos/guardar-eventos?accion=historico&fechaInicio=${fechaInicioStr}&fechaFin=${fechaFinStr}`;
-      
+      // CORREGIR ESTA URL:
+      // Cambiar de /api/sincronizar a /api/eventos/actualizar-eventos
+      const url = `/api/eventos/actualizar-eventos?accion=historico&fechaInicio=${fechaInicioStr}&fechaFin=${fechaFinStr}`;
+
+      console.log('📡 Enviando solicitud a:', url);
+
       const response = await fetch(url);
+
+      // Verificar si la respuesta es HTML (error)
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('❌ Respuesta no es JSON:', text.substring(0, 200));
+        throw new Error(`El servidor devolvió HTML en lugar de JSON. ¿URL correcta?`);
+      }
+
       const data = await response.json();
-      
+
+      console.log('📊 Respuesta recibida:', data);
+
       if (data.success) {
         setSyncResult(data);
 
@@ -132,16 +147,17 @@ export function HeaderEventos({
       setIsSincronizando(false);
     }
   };
+
   useEffect(() => {
-  if (syncResult && syncResult.success) {
-    const timer = setTimeout(() => {
-      setSyncResult(null);
-    }, 5000); // 5000 milisegundos = 5 segundos
-    
-    // Limpia el timer si el componente se desmonta
-    return () => clearTimeout(timer);
-  }
-}, [syncResult]);
+    if (syncResult && syncResult.success) {
+      const timer = setTimeout(() => {
+        setSyncResult(null);
+      }, 5000); // 5000 milisegundos = 5 segundos
+
+      // Limpia el timer si el componente se desmonta
+      return () => clearTimeout(timer);
+    }
+  }, [syncResult]);
 
   // Colores para departamentos
   const getDepartamentoColor = (depto: string) => {
@@ -169,7 +185,7 @@ export function HeaderEventos({
             <div className="p-6 border-b border-slate-700">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-xl font-bold text-white">Seleccionar Rango de Fechas</h3>                  
+                  <h3 className="text-xl font-bold text-white">Seleccionar Rango de Fechas</h3>
                 </div>
                 <button
                   onClick={handleCloseSyncModal}
@@ -207,8 +223,8 @@ export function HeaderEventos({
                     }}
                   />
                 </div>
-                
-              
+
+
               </div>
               <div className="text-sm text-slate-400">
                 {startDate && endDate ? (
@@ -222,12 +238,12 @@ export function HeaderEventos({
                   <span>Selecciona un rango de fechas</span>
                 )}
               </div>
-              
+
             </div>
 
             {/* Footer del modal */}
             <div className="p-6 border-t border-slate-700 flex justify-between items-center">
-              
+
               <div className="flex gap-3">
                 <button
                   onClick={handleCloseSyncModal}
@@ -336,26 +352,26 @@ export function HeaderEventos({
 
               <div className="flex items-center gap-2">
                 {!shouldHide(['TI', 'Team Leader']) && (
-                <button
-                  onClick={handleOpenSyncModal}
-                  disabled={isSincronizando || isRefreshing}
-                  className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-lg font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
-                  title="Abre calendario para seleccionar rango de fechas"
-                >
-                  {isSincronizando ? (
-                    <>
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                      Sincronizando...
-                    </>
-                  ) : (
-                    <>
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                      </svg>
-                      Sincronizar
-                    </>
-                  )}
-                </button>
+                  <button
+                    onClick={handleOpenSyncModal}
+                    disabled={isSincronizando || isRefreshing}
+                    className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-lg font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
+                    title="Abre calendario para seleccionar rango de fechas"
+                  >
+                    {isSincronizando ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                        Sincronizando...
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        Sincronizar
+                      </>
+                    )}
+                  </button>
                 )}
 
                 {/* Botón de actualizar normal */}
@@ -383,58 +399,58 @@ export function HeaderEventos({
             </div>
 
             {syncResult && syncResult.success && (
-  <div className="mb-4 p-3 bg-gradient-to-r from-green-900/30 to-emerald-900/30 rounded-lg border border-green-500/30 animate-pulse">
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-3">
-        <div className="text-green-400">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-          </svg>
-        </div>
-        <div>
-          <p className="text-sm font-medium text-green-300">{syncResult.message}</p>
-          <div className="flex gap-4 mt-1 text-xs text-green-200">
-            <span>📊 Eventos: {syncResult.eventos_obtenidos}</span>
-            <span>💾 Registros: {syncResult.registros_procesados}</span>
-            <span>⏱️ Tiempo: {syncResult.tiempo_segundos}s</span>
-          </div>
-        </div>
-      </div>
-      
-      {/* Indicador de tiempo */}
-      <div className="flex items-center gap-2">
-        <div className="relative w-8 h-8">
-          {/* Círculo de progreso */}
-          <svg className="w-8 h-8 transform -rotate-90">
-            <circle
-              cx="16"
-              cy="16"
-              r="7"
-              stroke="currentColor"
-              strokeWidth="2"
-              fill="none"
-              className="text-green-900/50"
-            />
-            <circle
-              cx="16"
-              cy="16"
-              r="7"
-              stroke="currentColor"
-              strokeWidth="2"
-              fill="none"
-              strokeDasharray="44"
-              strokeDashoffset="44"
-              className="text-green-400 animate-countdown"
-              style={{
-                animation: 'countdown 5s linear forwards'
-              }}
-            />
-          </svg>
-        </div>
-      </div>
-    </div>
-  </div>
-)}
+              <div className="mb-4 p-3 bg-gradient-to-r from-green-900/30 to-emerald-900/30 rounded-lg border border-green-500/30 animate-pulse">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="text-green-400">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-green-300">{syncResult.message}</p>
+                      <div className="flex gap-4 mt-1 text-xs text-green-200">
+                        <span>📊 Eventos: {syncResult.eventos_obtenidos}</span>
+                        <span>💾 Registros: {syncResult.registros_procesados}</span>
+                        <span>⏱️ Tiempo: {syncResult.tiempo_segundos}s</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Indicador de tiempo */}
+                  <div className="flex items-center gap-2">
+                    <div className="relative w-8 h-8">
+                      {/* Círculo de progreso */}
+                      <svg className="w-8 h-8 transform -rotate-90">
+                        <circle
+                          cx="16"
+                          cy="16"
+                          r="7"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          fill="none"
+                          className="text-green-900/50"
+                        />
+                        <circle
+                          cx="16"
+                          cy="16"
+                          r="7"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          fill="none"
+                          strokeDasharray="44"
+                          strokeDashoffset="44"
+                          className="text-green-400 animate-countdown"
+                          style={{
+                            animation: 'countdown 5s linear forwards'
+                          }}
+                        />
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* SEGUNDA FILA: Los tres elementos en una fila */}
@@ -665,8 +681,8 @@ export function HeaderEventos({
                           <div className="text-xs font-medium flex items-center gap-1.5">
                             <span className="truncate max-w-[100px]">{depto}</span>
                             <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold min-w-[20px] flex items-center justify-center ${isActive
-                                ? 'bg-white/20 text-white'
-                                : 'bg-slate-900/50 text-slate-300'
+                              ? 'bg-white/20 text-white'
+                              : 'bg-slate-900/50 text-slate-300'
                               }`}>
                               {count}
                             </span>

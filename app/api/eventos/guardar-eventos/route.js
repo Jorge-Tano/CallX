@@ -1,29 +1,22 @@
+// app/api/eventos/actualizar-eventos/route.js
 import { NextResponse } from 'next/server';
-import { Pool } from 'pg'; // Importa Pool en lugar de Client
+import { Pool } from 'pg';
 import { obtenerEventosDeHikvision } from '@/lib/db/eventos/database';
 
-// Configuración del pool (una sola instancia)
+// Configuración del pool de conexiones
 const pool = new Pool({
-  host: process.env.DB_HOST || '127.0.0.1',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME || 'hikvision_events',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'OnePiece00.',
-  max: 5, // REDUCIDO: máximo 5 conexiones
-  idleTimeoutMillis: 10000, // 10 segundos
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT ? parseInt(process.env.DB_PORT) : undefined,
+  database: process.env.DB_NAME,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  max: 5,
+  idleTimeoutMillis: 10000,
   connectionTimeoutMillis: 5000,
 });
 
 // ================================================
-// FUNCIONES DE UTILIDAD
-// ================================================
-
-const getCurrentDateTime = () => {
-  return new Date().toLocaleString('es-CO');
-};
-
-// ================================================
-// FUNCIONES DE SINCRONIZACIÓN
+// FUNCIONES AUXILIARES
 // ================================================
 
 async function obtenerCampañaPorDocumento(documento, client) {
@@ -40,20 +33,16 @@ async function obtenerCampañaPorDocumento(documento, client) {
   }
 }
 
-// MODIFICAR: Incluir toda la lógica de procesamiento
 async function procesarParaBD(eventos) {
   const hoy = new Date().toISOString().split('T')[0];
   const eventosHoy = eventos.filter(evento => evento.fecha === hoy);
 
-  if (eventosHoy.length === 0) {
-    return [];
-  }
+  if (eventosHoy.length === 0) return [];
 
   const eventosPorDocumento = {};
 
   eventosHoy.forEach((evento) => {
     if (evento.documento === 'N/A') return;
-
     const key = evento.documento;
     if (!eventosPorDocumento[key]) {
       eventosPorDocumento[key] = {
@@ -67,8 +56,6 @@ async function procesarParaBD(eventos) {
   });
 
   const registrosBD = [];
-
-  // Obtener una conexión del pool una sola vez
   const client = await pool.connect();
   
   try {
@@ -79,66 +66,34 @@ async function procesarParaBD(eventos) {
       const salidas = grupo.eventos.filter(e => e.tipo === 'Salida');
       const entradasAlmuerzo = grupo.eventos.filter(e => e.tipo === 'Entrada Almuerzo');
       const salidasAlmuerzo = grupo.eventos.filter(e => e.tipo === 'Salida Almuerzo');
-      const otrosEventos = grupo.eventos.filter(e => 
-        !['Entrada', 'Salida', 'Entrada Almuerzo', 'Salida Almuerzo'].includes(e.tipo)
-      );
 
       const primeraEntrada = entradas[0];
       const ultimaSalida = salidas[salidas.length - 1] || salidas[0];
       const salidaAlmuerzo = salidasAlmuerzo[0];
       const entradaAlmuerzo = entradasAlmuerzo[0];
 
-      let subtipo = '';
-
+      let subtipo = 'Sin registros';
       if (primeraEntrada && ultimaSalida && salidaAlmuerzo && entradaAlmuerzo) {
         subtipo = 'Jornada completa';
       } else if (primeraEntrada && ultimaSalida && !salidaAlmuerzo && !entradaAlmuerzo) {
-        subtipo = 'Sin almuerzo registrado';
-      } else if (primeraEntrada && !ultimaSalida && !salidaAlmuerzo && !entradaAlmuerzo) {
+        subtipo = 'Sin almuerzo';
+      } else if (primeraEntrada && !ultimaSalida) {
         subtipo = 'Solo entrada';
-      } else if (!primeraEntrada && ultimaSalida && !salidaAlmuerzo && !entradaAlmuerzo) {
+      } else if (!primeraEntrada && ultimaSalida) {
         subtipo = 'Solo salida';
-      } else if (primeraEntrada && !ultimaSalida && salidaAlmuerzo && entradaAlmuerzo) {
-        subtipo = 'Falta salida final';
-      } else if (!primeraEntrada && ultimaSalida && salidaAlmuerzo && entradaAlmuerzo) {
-        subtipo = 'Falta entrada inicial';
-      } else if (!primeraEntrada && !ultimaSalida && salidaAlmuerzo && entradaAlmuerzo) {
-        subtipo = 'Solo almuerzo';
-      } else if (primeraEntrada && ultimaSalida && salidaAlmuerzo && !entradaAlmuerzo) {
-        subtipo = 'Falta entrada almuerzo';
-      } else if (primeraEntrada && ultimaSalida && !salidaAlmuerzo && entradaAlmuerzo) {
-        subtipo = 'Falta salida almuerzo';
-      } else if (!primeraEntrada && !ultimaSalida && salidaAlmuerzo && !entradaAlmuerzo) {
-        subtipo = 'Solo salida almuerzo';
-      } else if (!primeraEntrada && !ultimaSalida && !salidaAlmuerzo && entradaAlmuerzo) {
-        subtipo = 'Solo entrada almuerzo';
-      } else if (otrosEventos.length > 0) {
-        subtipo = `Otros eventos (${otrosEventos.map(e => e.tipo).join(', ')})`;
-      } else {
-        subtipo = 'Sin registros';
+      } else if (primeraEntrada && ultimaSalida && (salidaAlmuerzo || entradaAlmuerzo)) {
+        subtipo = 'Almuerzo parcial';
       }
 
       let horaSalidaValida = ultimaSalida?.hora_simple || null;
-      if (primeraEntrada && ultimaSalida && 
-          primeraEntrada.hora_simple === ultimaSalida.hora_simple) {
+      if (primeraEntrada && ultimaSalida && primeraEntrada.hora_simple === ultimaSalida.hora_simple) {
         horaSalidaValida = null;
-        subtipo = 'ERROR - Misma hora entrada/salida';
+        subtipo = 'ERROR - Misma hora';
       }
 
-      if (primeraEntrada || ultimaSalida || salidaAlmuerzo || entradaAlmuerzo || otrosEventos.length > 0) {
-        const dispositivo = primeraEntrada?.dispositivo || 
-                           ultimaSalida?.dispositivo || 
-                           salidaAlmuerzo?.dispositivo || 
-                           entradaAlmuerzo?.dispositivo || 
-                           'Desconocido';
-
-        const foto = primeraEntrada?.foto || 
-                     ultimaSalida?.foto || 
-                     salidaAlmuerzo?.foto || 
-                     entradaAlmuerzo?.foto || 
-                     '';
-
-        // Obtener la campaña/departamento del usuario
+      if (primeraEntrada || ultimaSalida || salidaAlmuerzo || entradaAlmuerzo) {
+        const dispositivo = primeraEntrada?.dispositivo || ultimaSalida?.dispositivo || 'Desconocido';
+        const foto = primeraEntrada?.foto || '';
         const campaña = await obtenerCampañaPorDocumento(grupo.documento, client);
 
         registrosBD.push({
@@ -158,13 +113,16 @@ async function procesarParaBD(eventos) {
       }
     }
   } finally {
-    client.release(); // IMPORTANTE: liberar la conexión
+    client.release();
   }
 
   return registrosBD;
 }
 
-// Función principal MODIFICADA
+// ================================================
+// FUNCIÓN PRINCIPAL DE SINCRONIZACIÓN
+// ================================================
+
 async function sincronizarEventos() {
   const startTime = Date.now();
 
@@ -178,7 +136,7 @@ async function sincronizarEventos() {
         nuevos_registros: 0,
         registros_actualizados: 0,
         tiempo_segundos: ((Date.now() - startTime) / 1000).toFixed(2),
-        mensaje: 'No hay eventos de hoy para sincronizar'
+        mensaje: 'No hay eventos de hoy'
       };
     }
 
@@ -191,14 +149,13 @@ async function sincronizarEventos() {
         nuevos_registros: 0,
         registros_actualizados: 0,
         tiempo_segundos: ((Date.now() - startTime) / 1000).toFixed(2),
-        mensaje: 'Eventos obtenidos pero no generaron registros válidos'
+        mensaje: 'Eventos no generaron registros'
       };
     }
 
     let insertados = 0;
     let actualizados = 0;
 
-    // Usar el pool.query para queries simples (maneja conexión automáticamente)
     for (const registro of registrosBD) {
       try {
         const existe = await pool.query(
@@ -209,30 +166,16 @@ async function sincronizarEventos() {
         if (existe.rows.length > 0) {
           await pool.query(`
             UPDATE eventos_procesados SET
-              nombre = $1,
-              hora_entrada = $2,
-              hora_salida = $3,
-              hora_salida_almuerzo = $4,
-              hora_entrada_almuerzo = $5,
-              tipo_evento = $6,
-              subtipo_evento = $7,
-              dispositivo_ip = $8,
-              imagen = $9,
-              campaña = $10
+              nombre = $1, hora_entrada = $2, hora_salida = $3,
+              hora_salida_almuerzo = $4, hora_entrada_almuerzo = $5,
+              tipo_evento = $6, subtipo_evento = $7, dispositivo_ip = $8,
+              imagen = $9, campaña = $10
             WHERE documento = $11 AND fecha = $12
           `, [
-            registro.nombre,
-            registro.hora_entrada,
-            registro.hora_salida,
-            registro.hora_salida_almuerzo,
-            registro.hora_entrada_almuerzo,
-            registro.tipo_evento,
-            registro.subtipo_evento,
-            registro.dispositivo_ip,
-            registro.imagen,
-            registro.campaña,
-            registro.documento,
-            registro.fecha
+            registro.nombre, registro.hora_entrada, registro.hora_salida,
+            registro.hora_salida_almuerzo, registro.hora_entrada_almuerzo,
+            registro.tipo_evento, registro.subtipo_evento, registro.dispositivo_ip,
+            registro.imagen, registro.campaña, registro.documento, registro.fecha
           ]);
           actualizados++;
         } else {
@@ -243,27 +186,23 @@ async function sincronizarEventos() {
               tipo_evento, subtipo_evento, dispositivo_ip, imagen, campaña
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
           `, [
-            registro.documento,
-            registro.nombre,
-            registro.fecha,
-            registro.hora_entrada,
-            registro.hora_salida,
-            registro.hora_salida_almuerzo,
-            registro.hora_entrada_almuerzo,
-            registro.tipo_evento,
-            registro.subtipo_evento,
-            registro.dispositivo_ip,
-            registro.imagen,
-            registro.campaña
+            registro.documento, registro.nombre, registro.fecha,
+            registro.hora_entrada, registro.hora_salida,
+            registro.hora_salida_almuerzo, registro.hora_entrada_almuerzo,
+            registro.tipo_evento, registro.subtipo_evento,
+            registro.dispositivo_ip, registro.imagen, registro.campaña
           ]);
           insertados++;
         }
       } catch (error) {
-        console.error('Error procesando registro:', error.message);
+        // Error silencioso para registros individuales
       }
     }
 
     const tiempoTotal = ((Date.now() - startTime) / 1000).toFixed(2);
+
+    console.log(`Sincronización: ${eventosHikvision.length} eventos, ${registrosBD.length} registros`);
+    console.log(`Nuevos: ${insertados} | Actualizados: ${actualizados} | Tiempo: ${tiempoTotal}s`);
 
     return {
       eventos_obtenidos: eventosHikvision.length,
@@ -272,11 +211,11 @@ async function sincronizarEventos() {
       registros_actualizados: actualizados,
       tiempo_segundos: parseFloat(tiempoTotal),
       fecha_sincronizada: new Date().toISOString().split('T')[0],
-      hora_sincronizacion: getCurrentDateTime()
+      hora_sincronizacion: new Date().toLocaleString('es-CO')
     };
 
   } catch (error) {
-    console.error('Error en sincronizarEventos:', error);
+    console.error('Error en sincronización:', error.message);
     throw error;
   }
 }
@@ -294,15 +233,11 @@ async function ejecutarSincronizacionAutomatica() {
     const resultado = await sincronizarEventos();
     ultimaEjecucion = new Date().toISOString();
     
-    console.log(`[${getCurrentDateTime()}] Sincronización completada:`, {
-      registros: resultado.registros_procesados,
-      nuevos: resultado.nuevos_registros,
-      actualizados: resultado.registros_actualizados,
-      tiempo: resultado.tiempo_segundos + 's'
-    });
-    
+    if (resultado.eventos_obtenidos > 0) {
+      console.log(`Sincronización automática OK: ${resultado.registros_procesados} registros`);
+    }
   } catch (error) {
-    console.error(`[${getCurrentDateTime()}] Error en sincronización:`, error.message);
+    console.error('Error en sincronización automática:', error.message);
   }
 }
 
@@ -310,14 +245,9 @@ function iniciarSincronizacionAutomatica() {
   if (sincronizacionActiva) return;
   
   sincronizacionActiva = true;
-  
-  // Ejecutar inmediatamente
   ejecutarSincronizacionAutomatica();
-  
-  // Configurar intervalo de 1 minuto
   intervaloId = setInterval(ejecutarSincronizacionAutomatica, 1 * 60 * 1000);
-  
-  console.log(`[${getCurrentDateTime()}] Sincronización automática iniciada (1 minuto)`);
+  console.log('Sincronización automática iniciada (1 minuto)');
 }
 
 function detenerSincronizacionAutomatica() {
@@ -326,11 +256,11 @@ function detenerSincronizacionAutomatica() {
     intervaloId = null;
   }
   sincronizacionActiva = false;
-  console.log(`[${getCurrentDateTime()}] Sincronización automática detenida`);
+  console.log('Sincronización automática detenida');
 }
 
 // ================================================
-// ENDPOINTS (se mantienen igual)
+// ENDPOINTS
 // ================================================
 
 export async function GET(request) {
@@ -351,90 +281,50 @@ export async function GET(request) {
         sincronizacion_automatica: {
           activa: sincronizacionActiva,
           ultima_ejecucion: ultimaEjecucion,
-          proxima_ejecucion: proximaEjecucion ? proximaEjecucion.toISOString() : null,
+          proxima_ejecucion: proximaEjecucion?.toISOString(),
           intervalo_minutos: 1
-        },
-        timestamps: {
-          servidor: new Date().toISOString(),
-          hora_local: getCurrentDateTime()
         }
       });
     }
     
     if (accion === 'iniciar') {
-      if (!sincronizacionActiva) {
-        iniciarSincronizacionAutomatica();
-        return NextResponse.json({
-          success: true,
-          message: 'Sincronización automática iniciada',
-          intervalo: '1 minuto',
-          hora: getCurrentDateTime()
-        });
-      } else {
-        return NextResponse.json({
-          success: true,
-          message: 'La sincronización automática ya está activa',
-          hora: getCurrentDateTime()
-        });
-      }
+      iniciarSincronizacionAutomatica();
+      return NextResponse.json({
+        success: true,
+        message: 'Sincronización automática iniciada'
+      });
     }
     
     if (accion === 'detener') {
-      if (sincronizacionActiva) {
-        detenerSincronizacionAutomatica();
-        return NextResponse.json({
-          success: true,
-          message: 'Sincronización automática detenida',
-          hora: getCurrentDateTime()
-        });
-      } else {
-        return NextResponse.json({
-          success: true,
-          message: 'La sincronización automática no está activa',
-          hora: getCurrentDateTime()
-        });
-      }
+      detenerSincronizacionAutomatica();
+      return NextResponse.json({
+        success: true,
+        message: 'Sincronización automática detenida'
+      });
     }
     
     if (accion === 'forzar') {
       const resultado = await sincronizarEventos();
-      
       return NextResponse.json({
         success: true,
         message: 'Sincronización forzada ejecutada',
-        hora: getCurrentDateTime(),
         ...resultado
       });
     }
 
     const resultado = await sincronizarEventos();
-
     return NextResponse.json({
       success: true,
-      message: 'Sincronización de eventos de hoy completada',
-      timestamp: new Date().toISOString(),
-      hora: getCurrentDateTime(),
+      message: 'Sincronización completada',
       ...resultado
-    }, {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache, no-store'
-      }
     });
 
   } catch (error) {
-    console.error('Error en endpoint GET:', error);
-    
+    console.error('Error en endpoint:', error.message);
     return NextResponse.json({
       success: false,
-      error: error.message,
-      timestamp: new Date().toISOString(),
-      hora: getCurrentDateTime()
-    }, {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
+      error: error.message
+    }, { status: 500 });
   }
 }
 
@@ -450,8 +340,6 @@ function iniciarAutomaticamente() {
   if (typeof window !== 'undefined') return;
   if (sincronizacionActiva) return;
 
-  console.log(`[${getCurrentDateTime()}] Iniciando sincronización automática en 5 segundos...`);
-  
   setTimeout(() => {
     iniciarSincronizacionAutomatica();
   }, 5000);

@@ -4,16 +4,16 @@ import { NextResponse } from 'next/server';
 // CONFIGURACIÓN DE DISPOSITIVOS
 const DEVICES = [
   { 
-    ip: process.env.HIKVISION_IP_1 || "172.31.0.165", 
-    username: process.env.HIKVISION_USERNAME_1 || "admin", 
-    password: process.env.HIKVISION_PASSWORD_1 || "Tattered3483",
+    ip: process.env.HIKVISION_IP1 , 
+    username: process.env.HIKUSER, 
+    password: process.env.HIKPASS,
     port: 443,
     protocol: 'https'
   },
   { 
-    ip: process.env.HIKVISION_IP_2 || "172.31.0.164", 
-    username: process.env.HIKVISION_USERNAME_2 || "admin", 
-    password: process.env.HIKVISION_PASSWORD_2 || "Tattered3483",
+    ip: process.env.HIKVISION_IP2, 
+    username: process.env.HIKUSER, 
+    password: process.env.HIKPASS ,
     port: 80,
     protocol: 'http'
   }

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { syncUsersFromHikvision, createSyncLog } from '@/lib/db/usuarios/sync-utils/route';
 
 // Configuración
-const HIKVISION_API = 'http://172.31.7.165:3001/api/users';
+const HIKVISION_API = 'http://172.31.7.165:3000/api/users';
 
 async function getHikvisionData() {
   console.log('📥 Obteniendo datos de Hikvision...');

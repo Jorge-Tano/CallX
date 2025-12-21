@@ -3,9 +3,10 @@ import { Client } from 'pg';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 
+
 const DB_CONFIG = {
   host: process.env.DB_HOST,
-  port: parseInt(process.env.DB_PORT || '5432'),
+  port: process.env.DB_PORT ? parseInt(process.env.DB_PORT) : undefined,
   database: process.env.DB_NAME,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD

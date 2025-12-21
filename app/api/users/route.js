@@ -6,9 +6,9 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 // Configuración
 const CONFIG = {
-  username: process.env.HIKUSER || "admin",
-  password: process.env.HIKPASS || "Tattered3483",
-  deviceIp: "172.31.0.165",
+  username: process.env.HIKUSER,
+  password: process.env.HIKPASS,
+  deviceIp: process.env.HIKVISION_IP1,
   batchSize: 30,
   maxBatches: 15,
   authRetries: 3,
