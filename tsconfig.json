@@ -29,6 +29,6 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     "**/*.mts"
-, "app/api/eventos/bd/route.js", "app/api/eventos/faltas/route.js"  ],
+, "app/api/eventos/bd/route.ts", "app/api/eventos/faltas/route.js"  ],
   "exclude": ["node_modules"]
 }

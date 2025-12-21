@@ -7,7 +7,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 const CONFIG = {
   username: "admin",
   password: "Tattered3483",
-  deviceIps: ["172.31.0.165", "172.31.0.164"]
+  deviceIps: ["172.31.0.130", "172.31.0.131"]
 };
 
 const httpsAgent = new https.Agent({
