@@ -132,7 +132,7 @@ export default function EventosPage() {
   ) => {
     setIsLoading(true);
     try {
-      let url = `/api/eventos/bd?rango=${periodo}`;
+      let url = `/api/eventos?rango=${periodo}`;
 
       const deptoFiltro = deptoFiltroParam !== undefined ? deptoFiltroParam : departamentoFiltro;
       const ejecFiltro = ejecFiltroParam !== undefined ? ejecFiltroParam : ejecutivoFiltro;

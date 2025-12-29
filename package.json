@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "next -p 3000",
+    "dev": "next -p 3002",
     "build": "next build",
     "start": "next start -p 3001",
     "lint": "eslint",
