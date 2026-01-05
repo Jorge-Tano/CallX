@@ -1,18 +1,16 @@
 // components/Header.tsx
 import { useState, useEffect } from 'react';
-import DatePicker from 'react-datepicker';
-import "react-datepicker/dist/react-datepicker.css";
 import { useHideFrom } from "@/lib/hooks/useRole";
 
 interface HeaderEventosProps {
   estadisticas: {
     usuariosPorDepartamento: Record<string, number>;
-    ejecutivos: string[]; // Nuevo: lista de ejecutivos disponibles
+    ejecutivos: string[];
   };
   departamentoFiltro: string | null;
-  ejecutivoFiltro: string | null; // Nuevo
+  ejecutivoFiltro: string | null;
   onFiltroChange: (departamento: string | null) => void;
-  onEjecutivoChange: (ejecutivo: string | null) => void; // Nuevo
+  onEjecutivoChange: (ejecutivo: string | null) => void;
   eventosCount: number;
   onRefresh: () => void;
   isRefreshing?: boolean;
@@ -29,12 +27,6 @@ const formatDateToLocal = (date: Date): string => {
   const mes = String(date.getMonth() + 1).padStart(2, '0');
   const dia = String(date.getDate()).padStart(2, '0');
   return `${año}-${mes}-${dia}`;
-};
-
-// Función para convertir string YYYY-MM-DD a Date (local)
-const stringToLocalDate = (dateString: string): Date => {
-  const [year, month, day] = dateString.split('-').map(Number);
-  return new Date(year, month - 1, day);
 };
 
 export function HeaderEventos({
@@ -57,13 +49,14 @@ export function HeaderEventos({
   const [localFechaInicio, setLocalFechaInicio] = useState(fechaInicio);
   const [localFechaFin, setLocalFechaFin] = useState(fechaFin);
   const [isSincronizando, setIsSincronizando] = useState(false);
-  const [syncResult, setSyncResult] = useState<{ success?: boolean; message?: string; eventos_obtenidos?: number; registros_procesados?: number; tiempo_segundos?: number } | null>(null);
-
-  // Estados para el modal de sincronización con DatePicker
-  const [showSyncModal, setShowSyncModal] = useState(false);
-  const [startDate, setStartDate] = useState<Date | null>(null);
-  const [endDate, setEndDate] = useState<Date | null>(null);
-  const [dateRange, setDateRange] = useState<[Date | null, Date | null]>([null, null]);
+  const [syncResult, setSyncResult] = useState<{
+    success?: boolean;
+    message?: string;
+    eventosObtenidos?: number;
+    registros_procesados?: number;
+    tiempo_segundos?: number;
+    diasProcesados?: number;
+  } | null>(null);
 
   // Estados para el filtro de ejecutivos con búsqueda
   const [searchEjecutivo, setSearchEjecutivo] = useState('');
@@ -72,12 +65,6 @@ export function HeaderEventos({
 
   // Sincronizar fechas locales con props
   useEffect(() => {
-    console.log('📅 Header: Sincronizando fechas', { 
-      props: { fechaInicio, fechaFin }, 
-      estado: { localFechaInicio, localFechaFin } 
-    });
-    
-    // Siempre sincronizar con props
     if (fechaInicio !== localFechaInicio) {
       setLocalFechaInicio(fechaInicio);
     }
@@ -118,108 +105,51 @@ export function HeaderEventos({
 
   const handleFechaInicioChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const nuevaInicio = e.target.value;
-    console.log('📅 Header: Cambio fecha inicio', { 
-      anterior: localFechaInicio, 
-      nueva: nuevaInicio,
-      periodo: selectedPeriodo 
-    });
-    
     setLocalFechaInicio(nuevaInicio);
-    
-    // Cambiar a período personalizado automáticamente
     onPeriodoChange('personalizado');
     onFechasChange(nuevaInicio, fechaFin);
   };
 
   const handleFechaFinChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const nuevaFin = e.target.value;
-    console.log('📅 Header: Cambio fecha fin', { 
-      anterior: localFechaFin, 
-      nueva: nuevaFin,
-      periodo: selectedPeriodo 
-    });
-    
     setLocalFechaFin(nuevaFin);
-    // Cambiar a período personalizado automáticamente
     onPeriodoChange('personalizado');
     onFechasChange(fechaInicio, nuevaFin);
   };
 
-  // En el modal de sincronización, corrige la inicialización:
-  const handleOpenSyncModal = () => {
-    // Usar las fechas actuales del rango en lugar de "hoy"
-    const inicio = fechaInicio ? stringToLocalDate(fechaInicio) : new Date();
-    const fin = fechaFin ? stringToLocalDate(fechaFin) : new Date();
-
-    console.log('📅 Modal: Fechas iniciales', { inicio, fin, fechaInicio, fechaFin });
-
-    setStartDate(inicio);
-    setEndDate(fin);
-    setDateRange([inicio, fin]);
-    setShowSyncModal(true);
-  };
-
-  // Función para cerrar modal
-  const handleCloseSyncModal = () => {
-    setShowSyncModal(false);
-  };
-
-  // Función para manejar cambio de rango en DatePicker
-  const handleDateRangeChange = (update: [Date | null, Date | null]) => {
-    setDateRange(update);
-    setStartDate(update[0]);
-    setEndDate(update[1]);
-  };
-
-  // En Header.tsx, en la función handleExecuteSync:
-  const handleExecuteSync = async () => {
-    if (!startDate || !endDate) {
-      alert('⚠️ Por favor selecciona un rango de fechas válido');
-      return;
-    }
-
-    const fechaInicioStr = formatDateToLocal(startDate);
-    const fechaFinStr = formatDateToLocal(endDate);
-    
-    console.log('📅 Sincronizando rango:', { 
-      fechaInicioStr, 
-      fechaFinStr,
-      startDate,
-      endDate 
-    });
-
+  // Función para sincronizar TODOS los eventos
+  const handleSincronizarTodo = async () => {
     setIsSincronizando(true);
     setSyncResult(null);
-    handleCloseSyncModal();
 
     try {
-      const url = `/api/eventos/actualizar-eventos?accion=historico&fechaInicio=${fechaInicioStr}&fechaFin=${fechaFinStr}`;
+      const response = await fetch('/api/eventos/actualizar-eventos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
 
-      console.log('📡 Enviando solicitud a:', url);
-
-      const response = await fetch(url);
-
-      // Verificar si la respuesta es HTML (error)
-      const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        const text = await response.text();
-        console.error('❌ Respuesta no es JSON:', text.substring(0, 200));
-        throw new Error(`El servidor devolvió HTML en lugar de JSON. ¿URL correcta?`);
+      if (!response.ok) {
+        throw new Error(`Error HTTP: ${response.status}`);
       }
 
       const data = await response.json();
-
-      console.log('📊 Respuesta recibida:', data);
-
+      
       if (data.success) {
-        setSyncResult(data);
+        setSyncResult({
+          success: true,
+          message: data.procesamiento?.message || 'Sincronización completada',
+          eventosObtenidos: data.estadisticas?.eventosObtenidos || 0,
+          registros_procesados: data.procesamiento?.saved || 0,
+          diasProcesados: data.procesamiento?.diasProcesados || 0,
+          tiempo_segundos: data.tiempo?.segundos || '0.00'
+        });
 
-        // Refrescar la tabla automáticamente después de 2 segundos
+        // Refrescar después de 2 segundos
         setTimeout(() => {
           if (onRefresh) onRefresh();
         }, 2000);
       } else {
-        throw new Error(data.error || 'Error en la sincronización');
+        throw new Error(data.error || 'Error en sincronización');
       }
     } catch (error: any) {
       console.error('❌ Error sincronizando:', error);
@@ -242,13 +172,12 @@ export function HeaderEventos({
     setSearchEjecutivo('');
   };
 
+  // Limpiar mensaje de sincronización después de 5 segundos
   useEffect(() => {
     if (syncResult && syncResult.success) {
       const timer = setTimeout(() => {
         setSyncResult(null);
-      }, 5000); // 5000 milisegundos = 5 segundos
-
-      // Limpia el timer si el componente se desmonta
+      }, 5000);
       return () => clearTimeout(timer);
     }
   }, [syncResult]);
@@ -271,171 +200,10 @@ export function HeaderEventos({
 
   return (
     <>
-      {/* Modal de sincronización con DatePicker - UN SOLO MES */}
-      {showSyncModal && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-xl shadow-2xl border border-slate-700 w-full max-w-md">
-            {/* Header del modal */}
-            <div className="p-6 border-b border-slate-700">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-xl font-bold text-white">Seleccionar Rango de Fechas</h3>
-                </div>
-                <button
-                  onClick={handleCloseSyncModal}
-                  className="text-slate-400 hover:text-white transition-colors"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            {/* Contenido del modal - UN SOLO CALENDARIO */}
-            <div className="p-6">
-              {/* Calendario de selección de rango - UN SOLO MES */}
-              <div className="mb-6">
-                <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700">
-                  <DatePicker
-                    selectsRange={true}
-                    startDate={dateRange[0]}
-                    endDate={dateRange[1]}
-                    onChange={handleDateRangeChange}
-                    monthsShown={1}  // SOLO UN MES
-                    inline
-                    className="react-datepicker-custom"
-                    dateFormat="dd/MM/yyyy"
-                    maxDate={new Date()}
-                    locale="es"
-                    dayClassName={(date) => {
-                      const baseClass = "react-datepicker__day";
-                      if (dateRange[0] && dateRange[1] && date >= dateRange[0] && date <= dateRange[1]) {
-                        return `${baseClass} react-datepicker__day--in-range`;
-                      }
-                      return baseClass;
-                    }}
-                  />
-                </div>
-              </div>
-              <div className="text-sm text-slate-400">
-                {startDate && endDate ? (
-                  <span className="flex items-center gap-1">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-                    {formatDateToLocal(startDate)} al {formatDateToLocal(endDate)}
-                  </span>
-                ) : (
-                  <span>Selecciona un rango de fechas</span>
-                )}
-              </div>
-
-            </div>
-
-            {/* Footer del modal */}
-            <div className="p-6 border-t border-slate-700 flex justify-between items-center">
-
-              <div className="flex gap-3">
-                <button
-                  onClick={handleCloseSyncModal}
-                  className="px-4 py-2 text-slate-300 hover:text-white transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  onClick={handleExecuteSync}
-                  disabled={!startDate || !endDate}
-                  className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-lg font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  Sincronizar
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Estilos personalizados para el DatePicker */}
-      <style jsx global>{`
-        /* Calendario más compacto para un solo mes */
-        .react-datepicker {
-          background-color: #1e293b !important;
-          border-color: #475569 !important;
-          font-family: inherit !important;
-          width: 100% !important;
-        }
-        
-        .react-datepicker__header {
-          background-color: #0f172a !important;
-          border-bottom-color: #475569 !important;
-        }
-        
-        .react-datepicker__current-month,
-        .react-datepicker__day-name {
-          color: #e2e8f0 !important;
-          font-size: 0.9rem !important;
-        }
-        
-        .react-datepicker__day {
-          color: #cbd5e1 !important;
-          width: 2rem !important;
-          height: 2rem !important;
-          line-height: 2rem !important;
-          margin: 0.1rem !important;
-          font-size: 0.85rem !important;
-        }
-        
-        .react-datepicker__day:hover {
-          background-color: #475569 !important;
-        }
-        
-        .react-datepicker__day--selected,
-        .react-datepicker__day--in-range {
-          background-color: #7c3aed !important;
-          color: white !important;
-        }
-        
-        .react-datepicker__day--keyboard-selected {
-          background-color: #8b5cf6 !important;
-        }
-        
-        .react-datepicker__day--range-start,
-        .react-datepicker__day--range-end {
-          background-color: #6d28d9 !important;
-          font-weight: bold !important;
-        }
-        
-        .react-datepicker__navigation-icon::before {
-          border-color: #cbd5e1 !important;
-        }
-        
-        .react-datepicker__navigation:hover *::before {
-          border-color: #e2e8f0 !important;
-        }
-        
-        .react-datepicker__month-container {
-          width: 100% !important;
-        }
-        
-        /* Para que el calendario ocupe todo el ancho */
-        .react-datepicker__month {
-          margin: 0 !important;
-        }
-        
-        .react-datepicker__week {
-          display: flex !important;
-          justify-content: space-around !important;
-        }
-      `}</style>
-
       <div className="p-4 pt-20">
         <div className="mb-4 p-6 pt-2 pb-1 bg-gradient-to-r from-slate-600 via-emerald-600 to-slate-700 rounded-lg shadow-lg border border-slate-500/30">
 
-          {/* PRIMERA FILA: Título y estadísticas */}
+          {/* PRIMERA FILA: Título y botones */}
           <div className="mb-1">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-3">
@@ -445,10 +213,10 @@ export function HeaderEventos({
               <div className="flex items-center gap-2">
                 {!shouldHide(['TI', 'Team Leader']) && (
                   <button
-                    onClick={handleOpenSyncModal}
+                    onClick={handleSincronizarTodo}
                     disabled={isSincronizando || isRefreshing}
                     className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-lg font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
-                    title="Abre calendario para seleccionar rango de fechas"
+                    title="Sincronizar TODOS los eventos históricos"
                   >
                     {isSincronizando ? (
                       <>
@@ -460,7 +228,7 @@ export function HeaderEventos({
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                         </svg>
-                        Sincronizar
+                        Sincronizar Todo
                       </>
                     )}
                   </button>
@@ -471,7 +239,7 @@ export function HeaderEventos({
                   onClick={onRefresh}
                   disabled={isRefreshing || isSincronizando}
                   className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white rounded-lg font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
-                  title="Actualizar eventos del día de hoy"
+                  title="Actualizar eventos del rango actual"
                 >
                   {isRefreshing ? (
                     <>
@@ -483,13 +251,14 @@ export function HeaderEventos({
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                       </svg>
-                      Actualizar Hoy
+                      Actualizar
                     </>
                   )}
                 </button>
               </div>
             </div>
 
+            {/* Mensaje de resultado de sincronización */}
             {syncResult && syncResult.success && (
               <div className="mb-4 p-3 bg-gradient-to-r from-green-900/30 to-emerald-900/30 rounded-lg border border-green-500/30 animate-pulse">
                 <div className="flex items-center justify-between">
@@ -502,8 +271,9 @@ export function HeaderEventos({
                     <div>
                       <p className="text-sm font-medium text-green-300">{syncResult.message}</p>
                       <div className="flex gap-4 mt-1 text-xs text-green-200">
-                        <span>📊 Eventos: {syncResult.eventos_obtenidos}</span>
-                        <span>💾 Registros: {syncResult.registros_procesados}</span>
+                        <span>📅 Días procesados: {syncResult.diasProcesados}</span>
+                        <span>📊 Eventos obtenidos: {syncResult.eventosObtenidos}</span>
+                        <span>💾 Registros guardados: {syncResult.registros_procesados}</span>
                         <span>⏱️ Tiempo: {syncResult.tiempo_segundos}s</span>
                       </div>
                     </div>
@@ -512,7 +282,6 @@ export function HeaderEventos({
                   {/* Indicador de tiempo */}
                   <div className="flex items-center gap-2">
                     <div className="relative w-8 h-8">
-                      {/* Círculo de progreso */}
                       <svg className="w-8 h-8 transform -rotate-90">
                         <circle
                           cx="16"
@@ -545,7 +314,7 @@ export function HeaderEventos({
             )}
           </div>
 
-          {/* SEGUNDA FILA: Los tres elementos en una fila */}
+          {/* SEGUNDA FILA: Filtros de período y fechas */}
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 mb-1">
 
             {/* COLUMNA 1: Filtro por período */}
@@ -567,7 +336,7 @@ export function HeaderEventos({
                     {selectedPeriodo === 'hoy' && 'Hoy'}
                     {selectedPeriodo === '7dias' && 'Últimos 7 días'}
                     {selectedPeriodo === '30dias' && 'Últimos 30 días'}
-                    {selectedPeriodo === 'personalizado' && `Personalizado`}
+                    {selectedPeriodo === 'personalizado' && 'Personalizado'}
                   </div>
                 </div>
               </div>
@@ -631,7 +400,7 @@ export function HeaderEventos({
                 </button>
               </div>
 
-              {/* Fechas a los lados - CON MÁS ESPACIO */}
+              {/* Fechas a los lados */}
               <div className="flex items-center gap-6 mb-4">
                 {/* Fecha Inicio */}
                 <div className="flex-1">
@@ -650,7 +419,7 @@ export function HeaderEventos({
                   />
                 </div>
 
-                {/* Flecha separadora más grande */}
+                {/* Flecha separadora */}
                 <div className="pt-8">
                   <svg className="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
@@ -674,23 +443,6 @@ export function HeaderEventos({
                     min={localFechaInicio}
                   />
                 </div>
-              </div>
-
-              {/* Botón rápido de aplicar para móvil */}
-              <div className="lg:hidden">
-                <button
-                  onClick={() => onPeriodoChange('personalizado')}
-                  disabled={!fechaInicio || !fechaFin || isSincronizando}
-                  className={`w-full px-4 py-2.5 rounded-lg text-sm font-medium flex items-center justify-center gap-2 ${selectedPeriodo === 'personalizado' && fechaInicio && fechaFin
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed'
-                    }`}
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                  Aplicar Rango Personalizado
-                </button>
               </div>
             </div>
 
@@ -769,7 +521,7 @@ export function HeaderEventos({
                             ? `bg-gradient-to-br ${colorClase} text-white font-medium`
                             : 'bg-gradient-to-br from-slate-700/80 to-slate-800/80 hover:from-slate-600/80 hover:to-slate-700/80 border-slate-600/40 hover:border-slate-500/50 text-slate-200'
                             } disabled:opacity-50 disabled:cursor-not-allowed`}
-                          title={`Filtrar por ${depto} (${count} usuarios)\nClick para ${isActive ? 'quitar filtro' : 'aplicar filtro'}`}
+                          title={`Filtrar por ${depto} (${count} usuarios)`}
                         >
                           <div className="text-xs font-medium flex items-center gap-1.5">
                             <span className="truncate max-w-[100px]">{depto}</span>
@@ -905,21 +657,21 @@ export function HeaderEventos({
           </div>
         </div>
       </div>
+
+      <style jsx global>{`
+        @keyframes countdown {
+          from {
+            stroke-dashoffset: 44;
+          }
+          to {
+            stroke-dashoffset: 0;
+          }
+        }
+        
+        .animate-countdown {
+          animation: countdown 5s linear forwards;
+        }
+      `}</style>
     </>
   );
 }
-
-<style jsx global>{`
-  @keyframes countdown {
-    from {
-      stroke-dashoffset: 44;
-    }
-    to {
-      stroke-dashoffset: 0;
-    }
-  }
-  
-  .animate-countdown {
-    animation: countdown 5s linear forwards;
-  }
-`}</style>

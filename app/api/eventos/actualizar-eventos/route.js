@@ -1,667 +1,711 @@
-// // app/api/eventos/actualizar-eventos/route.js
-// import { NextResponse } from 'next/server';
-// import { Client } from 'pg';
-// import DigestFetch from 'digest-fetch';
-
-// // Configuración de PostgreSQL
-// const DB_CONFIG = {
-//   host: process.env.DB_HOST,
-//   port: process.env.DB_PORT ? parseInt(process.env.DB_PORT) : undefined,
-//   database: process.env.DB_NAME,
-//   user: process.env.DB_USER,
-//   password: process.env.DB_PASSWORD
-// };
-
-// // Configuración HIKVISION
-// const HIKVISION_CONFIG = {
-//   username: process.env.HIKUSER,
-//   password: process.env.HIKPASS,
-//   devices: [process.env.HIKVISION_IP1, process.env.HIKVISION_IP2].filter(Boolean),
-//   maxResults: 100,
-//   requestDelay: 300,
-//   deviceDelay: 1000,
-//   timeout: 30000
-// };
-
-// // Función de logging simplificada
-// const log = {
-//   info: (...args) => console.log(`[${new Date().toLocaleString('es-CO')}]`, ...args),
-//   error: (...args) => console.error(`[${new Date().toLocaleString('es-CO')}] ❌`, ...args),
-//   success: (...args) => console.log(`[${new Date().toLocaleString('es-CO')}] ✅`, ...args),
-//   warn: (...args) => console.warn(`[${new Date().toLocaleString('es-CO')}] ⚠️`, ...args)
-// };
-
-// const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-// const formatHikvisionDate = (date) => date.toISOString().replace(/\.\d{3}Z$/, '');
-
-// // Cliente Hikvision
-// class HikvisionClient {
-//   constructor(deviceIp) {
-//     this.deviceIp = deviceIp;
-//     this.baseUrl = `https://${deviceIp}/ISAPI/AccessControl/AcsEvent?format=json`;
-//     this.client = new DigestFetch(HIKVISION_CONFIG.username, HIKVISION_CONFIG.password, {
-//       disableRetry: true,
-//       algorithm: 'MD5'
-//     });
-//   }
-
-//   async fetchEvents(startTime, endTime, position = 0) {
-//     const body = {
-//       AcsEventCond: {
-//         searchID: `search_${this.deviceIp}_${Date.now()}`,
-//         searchResultPosition: position,
-//         maxResults: HIKVISION_CONFIG.maxResults,
-//         major: 5,
-//         minor: 75,
-//         startTime,
-//         endTime
-//       }
-//     };
-
-//     const res = await this.client.fetch(this.baseUrl, {
-//       method: "POST",
-//       body: JSON.stringify(body),
-//       headers: {
-//         "Content-Type": "application/json",
-//         "Accept": "application/json"
-//       },
-//       timeout: HIKVISION_CONFIG.timeout
-//     });
-
-//     if (!res.ok) {
-//       const errorText = await res.text();
-//       if (res.status === 400 || res.status === 404) {
-//         return { AcsEvent: { InfoList: [], totalMatches: 0 } };
-//       }
-//       throw new Error(`HTTP ${res.status}: ${errorText.substring(0, 100)}`);
-//     }
-
-//     const responseText = await res.text();
-//     if (!responseText || responseText.trim() === '') {
-//       return { AcsEvent: { InfoList: [], totalMatches: 0 } };
-//     }
-
-//     return JSON.parse(responseText);
-//   }
-// }
-
-// // Consultar eventos de un dispositivo
-// async function consultarTodosEventosDispositivo(client, startTime, endTime) {
-//   let allEvents = [];
-//   let position = 0;
-//   let batchNumber = 1;
-//   let totalMatches = null;
-//   let maxBatches = 30;
-
-//   while (batchNumber <= maxBatches) {
-//     try {
-//       const data = await client.fetchEvents(startTime, endTime, position);
-      
-//       if (!data?.AcsEvent) break;
-
-//       const eventosBatch = data.AcsEvent.InfoList || [];
-//       const batchSize = eventosBatch.length;
-
-//       if (batchNumber === 1) {
-//         totalMatches = data.AcsEvent.totalMatches || 0;
-//       }
-
-//       if (batchSize === 0) {
-//         if (totalMatches > 0 && allEvents.length >= totalMatches) break;
-//         if (batchNumber === 1 && totalMatches > 0) {
-//           position = 1;
-//           continue;
-//         }
-//         break;
-//       }
-
-//       const eventosConInfo = eventosBatch.map(evento => ({
-//         ...evento,
-//         dispositivo: client.deviceIp
-//       }));
-
-//       allEvents.push(...eventosConInfo);
-
-//       if (totalMatches > 0 && allEvents.length >= totalMatches) break;
-
-//       position += batchSize;
-//       batchNumber++;
-//       await delay(HIKVISION_CONFIG.requestDelay);
-
-//     } catch (error) {
-//       if (error.message.includes('position') || error.message.includes('range')) {
-//         position += 1;
-//         await delay(500);
-//         continue;
-//       }
-//       if (batchNumber <= 3) {
-//         await delay(2000);
-//         continue;
-//       }
-//       break;
-//     }
-//   }
-
-//   return { eventos: allEvents, dispositivo: client.deviceIp };
-// }
-
-// // Obtener eventos por día
-// async function obtenerEventosDeHikvisionPorDia(fecha) {
-//   const startTime = Date.now();
-  
-//   try {
-//     log.info(`Consultando eventos para: ${fecha}`);
-    
-//     const fechaLocal = new Date(`${fecha}T00:00:00`);
-//     const inicio = new Date(fechaLocal);
-//     inicio.setUTCHours(4, 0, 0, 0);
-//     const fin = new Date(fechaLocal);
-//     fin.setUTCHours(30, 59, 59, 999);
-
-//     const resultadosConsulta = [];
-
-//     for (const deviceIp of HIKVISION_CONFIG.devices) {
-//       let resultado;
-//       let intentos = 0;
-
-//       while (intentos < 2) {
-//         intentos++;
-//         try {
-//           const client = new HikvisionClient(deviceIp);
-//           resultado = await consultarTodosEventosDispositivo(
-//             client,
-//             formatHikvisionDate(inicio),
-//             formatHikvisionDate(fin)
-//           );
-//           if (resultado.eventos.length > 0) break;
-//         } catch (error) {
-//           if (intentos < 2) await delay(5000);
-//         }
-//       }
-
-//       if (resultado?.eventos.length > 0) {
-//         resultadosConsulta.push(resultado);
-//         log.success(`${deviceIp}: ${resultado.eventos.length} eventos`);
-//       }
-
-//       if (deviceIp !== HIKVISION_CONFIG.devices[HIKVISION_CONFIG.devices.length - 1]) {
-//         await delay(HIKVISION_CONFIG.deviceDelay);
-//       }
-//     }
-
-//     const eventosProcesados = procesarEventosCrudos(resultadosConsulta, fecha);
-//     const tiempoTotal = ((Date.now() - startTime) / 1000).toFixed(2);
-    
-//     log.success(`Consulta completada en ${tiempoTotal}s: ${eventosProcesados.length} eventos`);
-//     return eventosProcesados;
-
-//   } catch (error) {
-//     log.error(`Error obteniendo eventos para ${fecha}: ${error.message}`);
-//     return [];
-//   }
-// }
-
-// // Procesar eventos crudos
-// function procesarEventosCrudos(resultadosConsulta, fechaSolicitada) {
-//   const eventosProcesados = [];
-
-//   for (const resultado of resultadosConsulta) {
-//     const { dispositivo, eventos } = resultado;
-
-//     for (const evento of eventos) {
-//       try {
-//         if (!evento.time) continue;
-
-//         const fechaUTC = new Date(evento.time);
-//         if (isNaN(fechaUTC.getTime())) continue;
-        
-//         const fechaColombia = new Date(fechaUTC.getTime());
-//         fechaColombia.setHours(fechaColombia.getHours() - 5);
-        
-//         const fechaEventoColombia = fechaColombia.toISOString().split('T')[0];
-//         const horaColombia = fechaColombia.toISOString().split('T')[1]?.substring(0, 8) || '00:00:00';
-        
-//         if (fechaEventoColombia !== fechaSolicitada) continue;
-
-//         let tipo = 'Evento';
-//         const label = evento.label || '';
-//         const attendanceStatus = evento.attendanceStatus || '';
-
-//         if (attendanceStatus === 'breakOut') tipo = 'Salida Almuerzo';
-//         else if (attendanceStatus === 'breakIn') tipo = 'Entrada Almuerzo';
-//         else if (label.toLowerCase().includes('entrada')) {
-//           tipo = label.toLowerCase().includes('almuerzo') || label.toLowerCase().includes('lunch') 
-//             ? 'Entrada Almuerzo' : 'Entrada';
-//         } else if (label.toLowerCase().includes('salida')) {
-//           tipo = label.toLowerCase().includes('almuerzo') || label.toLowerCase().includes('lunch') 
-//             ? 'Salida Almuerzo' : 'Salida';
-//         } else if (evento.minor === 75) {
-//           tipo = (evento.major === 5 || evento.major === 1) ? 'Entrada' : 'Salida';
-//         } else if (evento.major === 1 || evento.cardReaderNo === 1) tipo = 'Entrada';
-//         else if (evento.major === 2 || evento.cardReaderNo === 2) tipo = 'Salida';
-
-//         let documento = 'N/A';
-//         if (evento.employeeNoString && evento.employeeNoString.trim() !== '') {
-//           documento = evento.employeeNoString.trim();
-//         } else if (evento.cardNo && evento.cardNo.trim() !== '') {
-//           documento = evento.cardNo.trim();
-//         } else if (evento.employeeNo) {
-//           documento = evento.employeeNo.toString();
-//         }
-
-//         const nombre = evento.name ? evento.name.trim() : 'Sin nombre';
-
-//         eventosProcesados.push({
-//           dispositivo,
-//           nombre,
-//           documento,
-//           fecha: fechaEventoColombia,
-//           hora_simple: horaColombia,
-//           tipo,
-//           departamento: evento.department || 'Sin departamento',
-//           foto: evento.pictureURL || ''
-//         });
-
-//       } catch (error) {
-//         // Error silencioso para eventos individuales
-//       }
-//     }
-//   }
-
-//   return eventosProcesados;
-// }
-
-// // Obtener eventos por rango
-// async function obtenerEventosDeHikvisionPorRango(fechaInicio, fechaFin) {
-//   const todosEventos = [];
-//   const inicio = new Date(fechaInicio);
-//   const fin = new Date(fechaFin);
-//   const fechaActual = new Date(inicio);
-  
-//   while (fechaActual <= fin) {
-//     const fechaStr = fechaActual.toISOString().split('T')[0];
-//     const eventosDelDia = await obtenerEventosDeHikvisionPorDia(fechaStr);
-    
-//     if (eventosDelDia.length > 0) {
-//       todosEventos.push(...eventosDelDia);
-//     }
-    
-//     fechaActual.setDate(fechaActual.getDate() + 1);
-//     if (fechaActual <= fin) await delay(1500);
-//   }
-  
-//   return todosEventos;
-// }
-
-// // Obtener campaña por documento
-// async function obtenerCampañaPorDocumento(documento, client) {
-//   if (!documento || documento === 'N/A') return 'Sin grupo';
-  
-//   try {
-//     const result = await client.query(
-//       'SELECT departamento FROM usuarios_hikvision WHERE employee_no = $1',
-//       [documento]
-//     );
-//     return result.rows.length > 0 ? result.rows[0].departamento : 'Sin grupo';
-//   } catch (error) {
-//     return 'Sin grupo';
-//   }
-// }
-
-// // Procesar para BD
-// async function procesarParaBD(eventos, client) {
-//   const eventosPorFechaDocumento = {};
-
-//   eventos.forEach((evento) => {
-//     if (evento.documento === 'N/A') return;
-//     const key = `${evento.fecha}_${evento.documento}`;
-//     if (!eventosPorFechaDocumento[key]) {
-//       eventosPorFechaDocumento[key] = {
-//         documento: evento.documento,
-//         nombre: evento.nombre,
-//         fecha: evento.fecha,
-//         eventos: []
-//       };
-//     }
-//     eventosPorFechaDocumento[key].eventos.push(evento);
-//   });
-
-//   const registrosBD = [];
-
-//   for (const key of Object.keys(eventosPorFechaDocumento)) {
-//     const grupo = eventosPorFechaDocumento[key];
-//     grupo.eventos.sort((a, b) => a.hora_simple.localeCompare(b.hora_simple));
-
-//     const entradas = grupo.eventos.filter(e => e.tipo === 'Entrada');
-//     const salidas = grupo.eventos.filter(e => e.tipo === 'Salida');
-//     const entradasAlmuerzo = grupo.eventos.filter(e => e.tipo === 'Entrada Almuerzo');
-//     const salidasAlmuerzo = grupo.eventos.filter(e => e.tipo === 'Salida Almuerzo');
-
-//     const primeraEntrada = entradas[0];
-//     const ultimaSalida = salidas[salidas.length - 1] || salidas[0];
-//     const salidaAlmuerzo = salidasAlmuerzo[0];
-//     const entradaAlmuerzo = entradasAlmuerzo[0];
-
-//     let subtipo = 'Sin registros';
-//     if (primeraEntrada && ultimaSalida && salidaAlmuerzo && entradaAlmuerzo) {
-//       subtipo = 'Jornada completa';
-//     } else if (primeraEntrada && ultimaSalida && !salidaAlmuerzo && !entradaAlmuerzo) {
-//       subtipo = 'Sin almuerzo';
-//     } else if (primeraEntrada && !ultimaSalida) {
-//       subtipo = 'Solo entrada';
-//     } else if (!primeraEntrada && ultimaSalida) {
-//       subtipo = 'Solo salida';
-//     } else if (primeraEntrada && ultimaSalida && (salidaAlmuerzo || entradaAlmuerzo)) {
-//       subtipo = 'Almuerzo parcial';
-//     }
-
-//     let horaSalidaValida = ultimaSalida?.hora_simple || null;
-//     if (primeraEntrada && ultimaSalida && primeraEntrada.hora_simple === ultimaSalida.hora_simple) {
-//       horaSalidaValida = null;
-//       subtipo = 'ERROR - Misma hora';
-//     }
-
-//     if (primeraEntrada || ultimaSalida || salidaAlmuerzo || entradaAlmuerzo) {
-//       const dispositivo = primeraEntrada?.dispositivo || ultimaSalida?.dispositivo || 'Desconocido';
-//       const foto = primeraEntrada?.foto || '';
-//       const campaña = await obtenerCampañaPorDocumento(grupo.documento, client);
-
-//       registrosBD.push({
-//         documento: grupo.documento,
-//         nombre: grupo.nombre,
-//         fecha: grupo.fecha,
-//         hora_entrada: primeraEntrada?.hora_simple || null,
-//         hora_salida: horaSalidaValida,
-//         hora_salida_almuerzo: salidaAlmuerzo?.hora_simple || null,
-//         hora_entrada_almuerzo: entradaAlmuerzo?.hora_simple || null,
-//         tipo_evento: 'Asistencia',
-//         subtipo_evento: subtipo,
-//         dispositivo_ip: dispositivo,
-//         imagen: foto,
-//         campaña: campaña
-//       });
-//     }
-//   }
-
-//   log.success(`Registros generados: ${registrosBD.length}`);
-//   return registrosBD;
-// }
-
-// // Función principal de sincronización
-// async function sincronizarEventos(fechaInicio = null, fechaFin = null) {
-//   const startTime = Date.now();
-//   let client;
-
-//   try {
-//     const esHistorico = fechaInicio && fechaFin && fechaInicio !== fechaFin;
-//     log.info(`${esHistorico ? 'SINCRONIZACIÓN HISTÓRICA' : 'SINCRONIZACIÓN DE HOY'}: ${fechaInicio || 'hoy'}`);
-
-//     let eventosHikvision;
-    
-//     if (esHistorico) {
-//       eventosHikvision = await obtenerEventosDeHikvisionPorRango(fechaInicio, fechaFin);
-//     } else {
-//       const hoy = fechaInicio || new Date().toISOString().split('T')[0];
-//       eventosHikvision = await obtenerEventosDeHikvisionPorDia(hoy);
-//     }
-
-//     if (eventosHikvision.length === 0) {
-//       const tiempoTotal = ((Date.now() - startTime) / 1000).toFixed(2);
-//       return {
-//         eventos_obtenidos: 0,
-//         registros_procesados: 0,
-//         nuevos_registros: 0,
-//         registros_actualizados: 0,
-//         tiempo_segundos: parseFloat(tiempoTotal),
-//         mensaje: 'No hay eventos'
-//       };
-//     }
-
-//     log.success(`${eventosHikvision.length} eventos obtenidos`);
-
-//     client = new Client(DB_CONFIG);
-//     await client.connect();
-
-//     await client.query(`
-//       CREATE TABLE IF NOT EXISTS eventos_procesados (
-//         id SERIAL PRIMARY KEY,
-//         documento VARCHAR(50) NOT NULL,
-//         nombre VARCHAR(255) NOT NULL,
-//         fecha DATE NOT NULL,
-//         hora_entrada TIME,
-//         hora_salida TIME,
-//         hora_salida_almuerzo TIME,
-//         hora_entrada_almuerzo TIME,
-//         tipo_evento VARCHAR(50),
-//         subtipo_evento VARCHAR(50),
-//         dispositivo_ip VARCHAR(50),
-//         imagen TEXT,
-//         campaña VARCHAR(100),
-//         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-//         UNIQUE(documento, fecha)
-//       )
-//     `);
-
-//     const registrosBD = await procesarParaBD(eventosHikvision, client);
-
-//     if (registrosBD.length === 0) {
-//       const tiempoTotal = ((Date.now() - startTime) / 1000).toFixed(2);
-//       return {
-//         eventos_obtenidos: eventosHikvision.length,
-//         registros_procesados: 0,
-//         nuevos_registros: 0,
-//         registros_actualizados: 0,
-//         tiempo_segundos: parseFloat(tiempoTotal),
-//         mensaje: 'Eventos obtenidos pero no generaron registros válidos'
-//       };
-//     }
-
-//     let insertados = 0;
-//     let actualizados = 0;
-//     let errores = 0;
-
-//     for (const registro of registrosBD) {
-//       try {
-//         const existe = await client.query(
-//           'SELECT id FROM eventos_procesados WHERE documento = $1 AND fecha = $2',
-//           [registro.documento, registro.fecha]
-//         );
-
-//         if (existe.rows.length > 0) {
-//           await client.query(`
-//             UPDATE eventos_procesados SET
-//               nombre = $1, hora_entrada = $2, hora_salida = $3,
-//               hora_salida_almuerzo = $4, hora_entrada_almuerzo = $5,
-//               tipo_evento = $6, subtipo_evento = $7, dispositivo_ip = $8,
-//               imagen = $9, campaña = $10
-//             WHERE documento = $11 AND fecha = $12
-//           `, [
-//             registro.nombre, registro.hora_entrada, registro.hora_salida,
-//             registro.hora_salida_almuerzo, registro.hora_entrada_almuerzo,
-//             registro.tipo_evento, registro.subtipo_evento, registro.dispositivo_ip,
-//             registro.imagen, registro.campaña, registro.documento, registro.fecha
-//           ]);
-//           actualizados++;
-//         } else {
-//           await client.query(`
-//             INSERT INTO eventos_procesados (
-//               documento, nombre, fecha, hora_entrada, hora_salida,
-//               hora_salida_almuerzo, hora_entrada_almuerzo,
-//               tipo_evento, subtipo_evento, dispositivo_ip, imagen, campaña
-//             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-//           `, [
-//             registro.documento, registro.nombre, registro.fecha,
-//             registro.hora_entrada, registro.hora_salida,
-//             registro.hora_salida_almuerzo, registro.hora_entrada_almuerzo,
-//             registro.tipo_evento, registro.subtipo_evento,
-//             registro.dispositivo_ip, registro.imagen, registro.campaña
-//           ]);
-//           insertados++;
-//         }
-//       } catch (error) {
-//         errores++;
-//       }
-//     }
-
-//     const tiempoTotal = ((Date.now() - startTime) / 1000).toFixed(2);
-
-//     log.success(`SINCRONIZACIÓN COMPLETADA`);
-//     log.info(`Eventos: ${eventosHikvision.length} | Registros: ${registrosBD.length}`);
-//     log.info(`Nuevos: ${insertados} | Actualizados: ${actualizados} | Errores: ${errores}`);
-//     log.info(`Tiempo: ${tiempoTotal}s`);
-
-//     return {
-//       eventos_obtenidos: eventosHikvision.length,
-//       registros_procesados: registrosBD.length,
-//       nuevos_registros: insertados,
-//       registros_actualizados: actualizados,
-//       errores: errores,
-//       tiempo_segundos: parseFloat(tiempoTotal),
-//       fecha_sincronizada: fechaInicio === fechaFin ? fechaInicio : `${fechaInicio} a ${fechaFin}`,
-//       hora_sincronizacion: new Date().toLocaleString('es-CO')
-//     };
-
-//   } catch (error) {
-//     log.error(`ERROR: ${error.message}`);
-//     throw error;
-//   } finally {
-//     if (client) await client.end();
-//   }
-// }
-
-// // Variables de control para sincronización automática
-// let sincronizacionActiva = false;
-// let ultimaEjecucion = null;
-// let intervaloId = null;
-
-// // Sincronización automática
-// async function ejecutarSincronizacionAutomatica() {
-//   try {
-//     log.info('Sincronización automática');
-//     const resultado = await sincronizarEventos();
-//     ultimaEjecucion = new Date().toISOString();
-    
-//     if (resultado.eventos_obtenidos > 0) {
-//       log.success(`Sincronización completada: ${resultado.eventos_obtenidos} eventos`);
-//     }
-//   } catch (error) {
-//     log.error(`Error en sincronización automática: ${error.message}`);
-//   }
-// }
-
-// function iniciarSincronizacionAutomatica() {
-//   if (sincronizacionActiva) return;
-//   sincronizacionActiva = true;
-//   ejecutarSincronizacionAutomatica();
-//   intervaloId = setInterval(ejecutarSincronizacionAutomatica, 2 * 60 * 1000);
-//   log.info('Sincronización automática iniciada (cada 2 minutos)');
-// }
-
-// function detenerSincronizacionAutomatica() {
-//   if (!sincronizacionActiva) return;
-//   if (intervaloId) clearInterval(intervaloId);
-//   sincronizacionActiva = false;
-//   intervaloId = null;
-//   log.info('Sincronización automática detenida');
-// }
-
-// // Endpoint principal
-// export async function GET(request) {
-//   try {
-//     const url = new URL(request.url);
-//     const accion = url.searchParams.get('accion');
-//     const fechaInicio = url.searchParams.get('fechaInicio');
-//     const fechaFin = url.searchParams.get('fechaFin');
-    
-//     if (accion === 'ayer') {
-//       const hoy = new Date();
-//       const ayer = new Date(hoy);
-//       ayer.setDate(hoy.getDate() - 1);
-//       const fechaAyer = ayer.toISOString().split('T')[0];
-//       const resultado = await sincronizarEventos(fechaAyer, fechaAyer);
-      
-//       return NextResponse.json({
-//         success: true,
-//         message: `Sincronización de ayer (${fechaAyer}) completada`,
-//         ...resultado
-//       });
-//     }
-    
-//     if (accion === 'historico' && fechaInicio && fechaFin) {
-//       const resultado = await sincronizarEventos(fechaInicio, fechaFin);
-//       return NextResponse.json({
-//         success: true,
-//         message: `Sincronización histórica de ${fechaInicio} al ${fechaFin} completada`,
-//         ...resultado
-//       });
-//     }
-    
-//     if (accion === 'estado') {
-//       return NextResponse.json({
-//         success: true,
-//         sincronizacion_automatica: {
-//           activa: sincronizacionActiva,
-//           ultima_ejecucion: ultimaEjecucion,
-//           intervalo_minutos: 2
-//         }
-//       });
-//     }
-    
-//     if (accion === 'iniciar') {
-//       iniciarSincronizacionAutomatica();
-//       return NextResponse.json({
-//         success: true,
-//         message: 'Sincronización automática iniciada',
-//         intervalo: '2 minutos'
-//       });
-//     }
-    
-//     if (accion === 'detener') {
-//       detenerSincronizacionAutomatica();
-//       return NextResponse.json({
-//         success: true,
-//         message: 'Sincronización automática detenida'
-//       });
-//     }
-    
-//     if (accion === 'forzar') {
-//       const resultado = await sincronizarEventos();
-//       return NextResponse.json({
-//         success: true,
-//         message: 'Sincronización forzada ejecutada',
-//         ...resultado
-//       });
-//     }
-
-//     const resultado = await sincronizarEventos();
-//     return NextResponse.json({
-//       success: true,
-//       message: 'Sincronización completada',
-//       ...resultado
-//     });
-
-//   } catch (error) {
-//     log.error(`ERROR EN ENDPOINT: ${error.message}`);
-//     return NextResponse.json({
-//       success: false,
-//       error: error.message
-//     }, { status: 500 });
-//   }
-// }
-
-// export async function POST(request) {
-//   return await GET(request);
-// }
-
-// // Iniciar automáticamente
-// function iniciarAutomaticamente() {
-//   if (typeof window !== 'undefined') return;
-//   if (sincronizacionActiva) return;
-
-//   setTimeout(() => {
-//     iniciarSincronizacionAutomatica();
-//   }, 3000);
-// }
-
-// log.info('Módulo de sincronización cargado');
-// iniciarAutomaticamente();
+// app/api/eventos/actualizar-eventos/route.js
+import { NextResponse } from 'next/server';
+import DigestFetch from 'digest-fetch';
+import { Pool } from 'pg';
+
+// Configuración - Ajustar para el dispositivo problemático
+const CONFIG = {
+    username: process.env.HIKUSER,
+    password: process.env.HIKPASS,
+    devices: [process.env.HIKVISION_IP1, process.env.HIKVISION_IP2].filter(Boolean),
+    timeout: 30000,
+    maxBatches: 100,           // Aumentar significativamente
+    batchSize: 30,             // ¡IMPORTANTE! Usar 30 (lo que realmente devuelve el dispositivo)
+    batchDelay: 500,           // Aumentar delay entre peticiones
+    maxRetries: 3              // Agregar reintentos
+};
+
+// Configuración PostgreSQL
+const pgConfig = {
+    user: process.env.DB_USER || 'postgres',
+    host: process.env.DB_HOST || '127.0.0.1',
+    database: process.env.DB_NAME || 'hikvision_events',
+    password: process.env.DB_PASSWORD || 'OnePiece00.',
+    port: parseInt(process.env.DB_PORT || '5432'),
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
+};
+
+const pool = new Pool(pgConfig);
+
+// Logger
+const logger = {
+    info: (msg, ...args) => console.log(`[${new Date().toLocaleTimeString('es-CO')}] ℹ️ ${msg}`, ...args),
+    success: (msg, ...args) => console.log(`[${new Date().toLocaleTimeString('es-CO')}] ✅ ${msg}`, ...args),
+    error: (msg, ...args) => console.error(`[${new Date().toLocaleTimeString('es-CO')}] ❌ ${msg}`, ...args),
+    warn: (msg, ...args) => console.warn(`[${new Date().toLocaleTimeString('es-CO')}] ⚠️ ${msg}`, ...args), // <-- AÑADIR ESTA LÍNEA
+    debug: (msg, ...args) => {
+        if (process.env.NODE_ENV === 'development') {
+            console.log(`[${new Date().toLocaleTimeString('es-CO')}] 🐛 ${msg}`, ...args);
+        }
+    }
+};
+
+// Utilidades - Formato EXACTO como en el ejemplo
+const formatHikvisionDate = (date) => {
+    // Formato: YYYY-MM-DDThh:mm:ss (EXACTAMENTE como en el ejemplo)
+    const año = date.getFullYear();
+    const mes = String(date.getMonth() + 1).padStart(2, '0');
+    const dia = String(date.getDate()).padStart(2, '0');
+    const horas = String(date.getHours()).padStart(2, '0');
+    const minutos = String(date.getMinutes()).padStart(2, '0');
+    const segundos = String(date.getSeconds()).padStart(2, '0');
+
+    return `${año}-${mes}-${dia}T${horas}:${minutos}:${segundos}`;
+};
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Cliente Hikvision CON manejo de sesión mejorado
+class HikvisionHistoricalClient {
+    constructor(deviceIp) {
+        this.deviceIp = deviceIp;
+        this.baseUrl = `https://${deviceIp}/ISAPI/AccessControl/AcsEvent?format=json`;
+        this.client = null;
+        this.lastRequestTime = 0;
+        this.requestCount = 0;
+        this.reauthenticate();
+    }
+
+    reauthenticate() {
+        // Crear nuevo cliente con credenciales frescas
+        this.client = new DigestFetch(CONFIG.username, CONFIG.password, {
+            disableRetry: false,  // Habilitar reintentos
+            algorithm: 'MD5'
+        });
+        this.requestCount = 0;
+        this.lastRequestTime = Date.now();
+        logger.debug(`${this.deviceIp}: Nueva autenticación creada`);
+    }
+
+    async fetchEventsRaw(startTime, endTime, position = 0) {
+        // Reiniciar autenticación después de cierto número de peticiones
+        if (this.requestCount >= 5) {  // Reiniciar cada 5 peticiones
+            logger.debug(`${this.deviceIp}: Reiniciando autenticación (${this.requestCount} peticiones)`);
+            this.reauthenticate();
+        }
+
+        // Body EXACTO como en el ejemplo de Postman
+        const body = {
+            AcsEventCond: {
+                searchID: `hist_${this.deviceIp}_${Date.now()}_${position}`,
+                searchResultPosition: position,
+                maxResults: 30, // ¡IMPORTANTE! Usar 30 en lugar de 100
+                major: 5,
+                minor: 75,
+                startTime: startTime,
+                endTime: endTime
+            }
+        };
+
+        this.requestCount++;
+
+        try {
+            const res = await this.client.fetch(this.baseUrl, {
+                method: "POST",
+                body: JSON.stringify(body),
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+                timeout: CONFIG.timeout
+            });
+
+            const responseText = await res.text();
+
+            if (res.status === 401) {
+                logger.warn(`${this.deviceIp}: Error 401 - Reautenticando...`);
+                this.reauthenticate();
+
+                // Reintentar una vez después de reautenticar
+                const retryRes = await this.client.fetch(this.baseUrl, {
+                    method: "POST",
+                    body: JSON.stringify(body),
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Accept": "application/json"
+                    },
+                    timeout: CONFIG.timeout
+                });
+
+                const retryText = await retryRes.text();
+
+                if (!retryRes.ok) {
+                    logger.error(`${this.deviceIp}: HTTP ${retryRes.status} después de reautenticar`);
+                    return {
+                        error: `HTTP ${retryRes.status} después de reautenticar`,
+                        deviceIp: this.deviceIp
+                    };
+                }
+
+                return {
+                    data: JSON.parse(retryText),
+                    deviceIp: this.deviceIp
+                };
+            }
+
+            if (!res.ok) {
+                logger.error(`${this.deviceIp}: HTTP ${res.status} - ${responseText.substring(0, 200)}`);
+                return {
+                    error: `HTTP ${res.status}`,
+                    deviceIp: this.deviceIp
+                };
+            }
+
+            if (!responseText || responseText.trim() === '') {
+                return { data: null, deviceIp: this.deviceIp };
+            }
+
+            return {
+                data: JSON.parse(responseText),
+                deviceIp: this.deviceIp
+            };
+
+        } catch (error) {
+            logger.error(`${this.deviceIp}: ${error.message}`);
+            return {
+                error: error.message,
+                deviceIp: this.deviceIp
+            };
+        }
+    }
+}
+
+// Función mejorada con manejo de errores robusto
+async function getAllEventsForDateRange(deviceIp, startTime, endTime) {
+    const client = new HikvisionHistoricalClient(deviceIp);
+    const todosLosEventos = [];
+    let position = 0;
+    let batchNumber = 1;
+    let totalReported = 0;
+    let hasMoreEvents = true;
+    let consecutiveErrors = 0;
+    const MAX_CONSECUTIVE_ERRORS = 3;
+
+    logger.info(`${deviceIp}: Consultando desde ${startTime} hasta ${endTime}`);
+
+    while (batchNumber <= CONFIG.maxBatches && hasMoreEvents && consecutiveErrors < MAX_CONSECUTIVE_ERRORS) {
+        try {
+            const resultado = await client.fetchEventsRaw(startTime, endTime, position);
+
+            if (resultado.error) {
+                consecutiveErrors++;
+                logger.error(`${deviceIp}: Error en lote ${batchNumber}: ${resultado.error} (${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS})`);
+                
+                if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                    logger.error(`${deviceIp}: Demasiados errores consecutivos, deteniendo...`);
+                    break;
+                }
+                
+                // Pequeña pausa después de un error
+                await delay(2000);
+                continue;
+            }
+
+            // Resetear contador de errores después de éxito
+            consecutiveErrors = 0;
+
+            if (!resultado.data?.AcsEvent?.InfoList || resultado.data.AcsEvent.InfoList.length === 0) {
+                logger.info(`${deviceIp}: No hay más eventos (lote ${batchNumber})`);
+                hasMoreEvents = false;
+                break;
+            }
+
+            const eventosBatch = resultado.data.AcsEvent.InfoList;
+            todosLosEventos.push(...eventosBatch);
+
+            // Actualizar total reportado
+            if (resultado.data.AcsEvent.totalMatches !== undefined) {
+                totalReported = resultado.data.AcsEvent.totalMatches;
+            }
+
+            logger.info(`${deviceIp}: Lote ${batchNumber} - ${eventosBatch.length} eventos (Total: ${todosLosEventos.length}/${totalReported})`);
+
+            // Lógica de finalización mejorada
+            if (totalReported > 0 && todosLosEventos.length >= totalReported) {
+                logger.success(`${deviceIp}: ✅ Obtenidos todos los eventos (${todosLosEventos.length}/${totalReported})`);
+                hasMoreEvents = false;
+                break;
+            }
+
+            // Si el dispositivo devuelve menos de batchSize pero no sabemos el total
+            // continuamos con cautela
+            position = todosLosEventos.length;
+            batchNumber++;
+
+            // Pausa más larga después de varios lotes
+            const delayTime = batchNumber % 10 === 0 ? 1000 : CONFIG.batchDelay;
+            await delay(delayTime);
+
+        } catch (error) {
+            consecutiveErrors++;
+            logger.error(`${deviceIp}: Error en lote ${batchNumber}: ${error.message}`);
+            await delay(2000); // Pausa más larga después de error
+        }
+    }
+
+    // Estadísticas finales
+    if (todosLosEventos.length > 0) {
+        logger.success(`${deviceIp}: ✅ ${todosLosEventos.length} eventos obtenidos`);
+        if (totalReported > 0 && todosLosEventos.length < totalReported) {
+            logger.warn(`${deviceIp}: ⚠️ Solo se obtuvieron ${todosLosEventos.length} de ${totalReported} eventos`);
+        }
+    } else {
+        logger.error(`${deviceIp}: ❌ No se obtuvieron eventos`);
+    }
+
+    return {
+        deviceIp,
+        eventos: todosLosEventos,
+        totalEventos: todosLosEventos.length,
+        totalReported: totalReported,
+        batchesProcessed: batchNumber - 1
+    };
+}
+
+// Función para obtener información de usuarios - SIN FILTRO DE ESTADO
+async function obtenerInfoUsuarios(documentos) {
+    if (!documentos || documentos.length === 0) {
+        return {};
+    }
+
+    try {
+        const placeholders = documentos.map((_, index) => `$${index + 1}`).join(',');
+
+        const query = `
+            SELECT 
+                employee_no as documento,
+                nombre,
+                departamento,
+                tipo_usuario,
+                estado,
+                genero
+            FROM usuarios_hikvision 
+            WHERE employee_no IN (${placeholders})
+        `;
+
+        const result = await pool.query(query, documentos);
+
+        logger.info(`✅ Obtenida información de ${result.rowCount} usuarios`);
+
+        const infoPorDocumento = {};
+        result.rows.forEach(row => {
+            infoPorDocumento[row.documento] = {
+                nombre: row.nombre,
+                departamento: row.departamento || 'General',
+                tipo_usuario: row.tipo_usuario,
+                estado: row.estado,
+                genero: row.genero
+            };
+        });
+
+        return infoPorDocumento;
+    } catch (error) {
+        logger.error(`Error obteniendo información de usuarios: ${error.message}`);
+        return {};
+    }
+}
+
+// Función principal para procesar y guardar eventos
+async function procesarEventos(eventosPorDispositivo) {
+    try {
+        // 1. Combinar todos los eventos
+        const todosLosEventos = [];
+        Object.entries(eventosPorDispositivo).forEach(([deviceIp, eventos]) => {
+            if (eventos && Array.isArray(eventos)) {
+                eventos.forEach(evento => {
+                    todosLosEventos.push({
+                        ...evento,
+                        dispositivo: deviceIp
+                    });
+                });
+            }
+        });
+
+        if (todosLosEventos.length === 0) {
+            return {
+                saved: 0,
+                errors: 0,
+                message: 'No se encontraron eventos para procesar'
+            };
+        }
+
+        logger.info(`📊 Procesando ${todosLosEventos.length} eventos...`);
+
+        // 2. Obtener información de usuarios únicos
+        const documentosUnicos = [...new Set(todosLosEventos
+            .map(evento => evento.employeeNoString || evento.cardNo)
+            .filter(Boolean))];
+
+        logger.info(`👥 Consultando información de ${documentosUnicos.length} usuarios únicos...`);
+        const usuariosInfo = await obtenerInfoUsuarios(documentosUnicos);
+
+        // 3. Procesar y estructurar eventos por día
+        const eventosPorDia = {};
+
+        todosLosEventos.forEach(event => {
+            try {
+                const documento = event.employeeNoString || event.cardNo || null;
+                const nombre = event.name || null;
+                const eventTime = event.time;
+                const attendanceStatus = event.attendanceStatus || null;
+                const dispositivo = event.dispositivo;
+                const pictureURL = event.pictureURL || null;
+
+                if (!documento || !eventTime || !attendanceStatus) {
+                    return;
+                }
+
+                const fecha = eventTime.split('T')[0];
+                const hora = eventTime.split('T')[1]?.split('-')[0]?.substring(0, 8);
+
+                if (!fecha || !hora) {
+                    return;
+                }
+
+                // Obtener información del usuario (puede no existir en la BD)
+                const infoUsuario = usuariosInfo[documento] || {};
+
+                if (!eventosPorDia[fecha]) {
+                    eventosPorDia[fecha] = {};
+                }
+
+                const key = `${documento}_${fecha}`;
+
+                if (!eventosPorDia[fecha][key]) {
+                    eventosPorDia[fecha][key] = {
+                        documento: documento,
+                        nombre: nombre || infoUsuario.nombre || 'Sin nombre',
+                        fecha: fecha,
+                        departamento: infoUsuario.departamento || 'General',
+                        imagen: null,
+                        dispositivo_ip: dispositivo,
+                        checkIns: [],
+                        checkOuts: [],
+                        breakOuts: [],
+                        breakIns: []
+                    };
+                }
+
+                // Agregar evento según el tipo
+                switch (attendanceStatus) {
+                    case 'checkIn':
+                        eventosPorDia[fecha][key].checkIns.push(hora);
+                        break;
+                    case 'checkOut':
+                        eventosPorDia[fecha][key].checkOuts.push(hora);
+                        break;
+                    case 'breakOut':
+                        eventosPorDia[fecha][key].breakOuts.push(hora);
+                        break;
+                    case 'breakIn':
+                        eventosPorDia[fecha][key].breakIns.push(hora);
+                        break;
+                }
+
+                // Guardar la imagen del primer evento con imagen
+                if (pictureURL && !eventosPorDia[fecha][key].imagen) {
+                    eventosPorDia[fecha][key].imagen = pictureURL;
+                }
+
+            } catch (error) {
+                logger.debug(`Error procesando evento: ${error.message}`);
+            }
+        });
+
+        // 4. Guardar en base de datos
+        let totalSaved = 0;
+        let totalErrors = 0;
+        const diasProcesados = Object.keys(eventosPorDia).length;
+
+        logger.info(`📅 Procesando ${diasProcesados} días de eventos...`);
+
+        for (const [fechaStr, eventosDelDia] of Object.entries(eventosPorDia)) {
+            let savedPorDia = 0;
+            let errorsPorDia = 0;
+
+            for (const evento of Object.values(eventosDelDia)) {
+                try {
+                    // Ordenar horas
+                    evento.checkIns.sort();
+                    evento.checkOuts.sort();
+                    evento.breakOuts.sort();
+                    evento.breakIns.sort();
+
+                    // Determinar valores finales
+                    const valores = {
+                        hora_entrada: evento.checkIns[0] || null,
+                        hora_salida: evento.checkOuts[evento.checkOuts.length - 1] || null,
+                        hora_salida_almuerzo: evento.breakOuts[0] || null,
+                        hora_entrada_almuerzo: evento.breakIns[evento.breakIns.length - 1] || null
+                    };
+
+                    // DEBUG: Mostrar lo que se va a guardar
+                    if (evento.documento === '1001414927' && fechaStr === '2026-01-02') {
+                        logger.info(`🔍 DEBUG 1001414927 - ${fechaStr}:`, {
+                            checkIns: evento.checkIns,
+                            checkOuts: evento.checkOuts,
+                            valores: valores,
+                            nombre: evento.nombre,
+                            departamento: evento.departamento
+                        });
+                    }
+
+                    // Solo guardar si hay AL MENOS UN dato
+                    const tieneDatos = valores.hora_entrada || valores.hora_salida ||
+                        valores.hora_salida_almuerzo || valores.hora_entrada_almuerzo;
+
+                    if (!tieneDatos) {
+                        continue;
+                    }
+
+                    const fechaDate = new Date(fechaStr + 'T00:00:00');
+
+                    const query = `
+                        INSERT INTO eventos_procesados (
+                            documento, nombre, fecha, 
+                            hora_entrada, hora_salida, 
+                            hora_salida_almuerzo, hora_entrada_almuerzo,
+                            dispositivo_ip, campaña, "imagen"
+                        ) VALUES ($1, $2, $3, $4::time, $5::time, $6::time, $7::time, $8, $9, $10)
+                        ON CONFLICT (documento, fecha)
+                        DO UPDATE SET
+                            hora_entrada = COALESCE(EXCLUDED.hora_entrada::time, eventos_procesados.hora_entrada),
+                            hora_salida = COALESCE(EXCLUDED.hora_salida::time, eventos_procesados.hora_salida),
+                            hora_salida_almuerzo = COALESCE(EXCLUDED.hora_salida_almuerzo::time, eventos_procesados.hora_salida_almuerzo),
+                            hora_entrada_almuerzo = COALESCE(EXCLUDED.hora_entrada_almuerzo::time, eventos_procesados.hora_entrada_almuerzo),
+                            nombre = COALESCE(EXCLUDED.nombre, eventos_procesados.nombre),
+                            dispositivo_ip = CASE 
+                                WHEN eventos_procesados.dispositivo_ip = 'multiple' THEN 'multiple'
+                                WHEN EXCLUDED.dispositivo_ip = 'multiple' THEN 'multiple'
+                                WHEN eventos_procesados.dispositivo_ip != EXCLUDED.dispositivo_ip THEN 'multiple'
+                                ELSE COALESCE(EXCLUDED.dispositivo_ip, eventos_procesados.dispositivo_ip)
+                            END,
+                            campaña = COALESCE(EXCLUDED.campaña, eventos_procesados.campaña),
+                            "imagen" = COALESCE(EXCLUDED."imagen", eventos_procesados."imagen")
+                        RETURNING id;
+                    `;
+
+                    await pool.query(query, [
+                        evento.documento,
+                        evento.nombre,
+                        fechaDate,
+                        valores.hora_entrada,
+                        valores.hora_salida,
+                        valores.hora_salida_almuerzo,
+                        valores.hora_entrada_almuerzo,
+                        evento.dispositivo_ip,
+                        evento.departamento,
+                        evento.imagen
+                    ]);
+
+                    savedPorDia++;
+                    totalSaved++;
+
+                    // Log específico para el usuario 1001414927
+                    if (evento.documento === '1001414927' && fechaStr === '2026-01-02') {
+                        logger.success(`✅ Guardado 1001414927 - ${fechaStr}: entrada=${valores.hora_entrada}, salida=${valores.hora_salida}`);
+                    }
+
+                } catch (error) {
+                    errorsPorDia++;
+                    totalErrors++;
+                    logger.error(`❌ Error guardando ${evento.documento}-${fechaStr}: ${error.message}`);
+                }
+            }
+
+            logger.info(`📅 Día ${fechaStr}: ${savedPorDia} registros guardados, ${errorsPorDia} errores`);
+        }
+
+        logger.success(`✅ Proceso completado: ${totalSaved} registros guardados, ${totalErrors} errores`);
+
+        return {
+            saved: totalSaved,
+            errors: totalErrors,
+            diasProcesados: diasProcesados,
+            eventosTotales: todosLosEventos.length,
+            message: `Procesados ${diasProcesados} días con ${totalSaved} registros`
+        };
+
+    } catch (error) {
+        logger.error(`Error en procesarEventos: ${error.message}`);
+        logger.error(`Stack: ${error.stack}`);
+        return {
+            saved: 0,
+            errors: 1,
+            message: `Error: ${error.message}`
+        };
+    }
+}
+
+// Función principal - Buscar TODOS los eventos (EXACTO como en Postman)
+async function sincronizarTodosEventos() {
+    const startTime = Date.now();
+
+    try {
+        logger.info(`🚀 INICIANDO SINCRONIZACIÓN DE TODOS LOS EVENTOS`);
+        logger.info(`📱 Dispositivos: ${CONFIG.devices.length}`);
+
+        // Rango EXACTO como en el ejemplo de Postman
+        const ahora = new Date();
+        const inicioDate = new Date('2025-01-01T00:00:00'); // Fijo: 1 de enero de 2025
+
+        // Asegurar horas exactas
+        inicioDate.setHours(0, 0, 0, 0);
+        ahora.setHours(23, 59, 59, 999);
+
+        const inicioBusqueda = formatHikvisionDate(inicioDate);
+        const finBusqueda = formatHikvisionDate(ahora);
+
+        logger.info(`🔍 Rango EXACTO como Postman:`);
+        logger.info(`   Inicio: ${inicioBusqueda} (1 de enero 2025)`);
+        logger.info(`   Fin: ${finBusqueda} (hoy)`);
+        logger.info(`   Duración: ${Math.ceil((ahora - inicioDate) / (1000 * 60 * 60 * 24))} días`);
+
+        // Consultar todos los dispositivos
+        logger.info(`📡 Consultando ${CONFIG.devices.length} dispositivos...`);
+
+        const resultados = await Promise.allSettled(
+            CONFIG.devices.map(deviceIp =>
+                getAllEventsForDateRange(deviceIp, inicioBusqueda, finBusqueda)
+            )
+        );
+
+        // Procesar resultados
+        const eventosPorDispositivo = {};
+        let totalEventosObtenidos = 0;
+        const estadisticasDispositivos = {};
+
+        for (let i = 0; i < resultados.length; i++) {
+            const resultado = resultados[i];
+            const deviceIp = CONFIG.devices[i];
+
+            if (resultado.status === 'fulfilled') {
+                const data = resultado.value;
+                eventosPorDispositivo[deviceIp] = data.eventos;
+                totalEventosObtenidos += data.totalEventos;
+
+                estadisticasDispositivos[deviceIp] = {
+                    eventos: data.totalEventos,
+                    batches: data.batchesProcessed
+                };
+
+                logger.success(`${deviceIp}: ${data.totalEventos} eventos obtenidos`);
+            } else {
+                eventosPorDispositivo[deviceIp] = [];
+                estadisticasDispositivos[deviceIp] = {
+                    eventos: 0,
+                    batches: 0,
+                    error: resultado.reason?.message
+                };
+                logger.error(`${deviceIp}: Error: ${resultado.reason?.message}`);
+            }
+        }
+
+        logger.info(`📊 Total eventos obtenidos de todos los dispositivos: ${totalEventosObtenidos}`);
+
+        // Procesar y guardar eventos
+        let dbResult = null;
+        if (totalEventosObtenidos > 0) {
+            logger.info(`💾 Guardando ${totalEventosObtenidos} eventos en base de datos...`);
+            dbResult = await procesarEventos(eventosPorDispositivo);
+        } else {
+            logger.warn('⚠️ NO se encontraron eventos en ningún dispositivo');
+            dbResult = {
+                saved: 0,
+                errors: 0,
+                message: 'No se encontraron eventos en los dispositivos'
+            };
+        }
+
+        const elapsed = Date.now() - startTime;
+        const elapsedSeconds = (elapsed / 1000).toFixed(2);
+
+        logger.success(`✅ Sincronización completada en ${elapsedSeconds} segundos`);
+
+        return {
+            success: true,
+            timestamp: new Date().toISOString(),
+            rango: {
+                inicio: inicioBusqueda,
+                fin: finBusqueda,
+                descripcion: 'Desde 1 de enero 2025 hasta hoy'
+            },
+            estadisticas: {
+                dispositivos: CONFIG.devices.length,
+                eventosObtenidos: totalEventosObtenidos,
+                porDispositivo: estadisticasDispositivos
+            },
+            procesamiento: dbResult,
+            tiempo: {
+                segundos: elapsedSeconds,
+                milisegundos: elapsed
+            }
+        };
+
+    } catch (error) {
+        const elapsed = Date.now() - startTime;
+        logger.error(`❌ Error en sincronización: ${error.message}`);
+        logger.error(`Stack: ${error.stack}`);
+
+        return {
+            success: false,
+            error: error.message,
+            timestamp: new Date().toISOString(),
+            tiempo: {
+                segundos: (elapsed / 1000).toFixed(2),
+                milisegundos: elapsed
+            }
+        };
+    }
+}
+
+// Endpoint único - Siempre sincroniza todos los eventos
+export async function POST(request) {
+    try {
+        logger.info(`📥 Solicitud de sincronización completa recibida`);
+
+        const resultado = await sincronizarTodosEventos();
+
+        return NextResponse.json({
+            ...resultado,
+            endpoint: '/api/eventos/actualizar-eventos',
+            descripcion: 'Sincroniza eventos desde 1 de enero 2025 hasta hoy'
+        });
+
+    } catch (error) {
+        logger.error(`Error en endpoint: ${error.message}`);
+        return NextResponse.json({
+            success: false,
+            error: error.message,
+            timestamp: new Date().toISOString()
+        }, { status: 500 });
+    }
+}
+
+// También acepta GET para compatibilidad
+export async function GET(request) {
+    try {
+        logger.info(`📥 Solicitud GET de sincronización recibida`);
+
+        const resultado = await sincronizarTodosEventos();
+
+        return NextResponse.json({
+            ...resultado,
+            metodo: 'GET',
+            nota: 'Recomendado usar POST para operaciones largas'
+        });
+
+    } catch (error) {
+        logger.error(`Error en endpoint GET: ${error.message}`);
+        return NextResponse.json({
+            success: false,
+            error: error.message,
+            timestamp: new Date().toISOString()
+        }, { status: 500 });
+    }
+}
+
+// Configuración de runtime
+export const dynamic = 'force-dynamic';
+export const maxDuration = 600; // 10 minutos máximo

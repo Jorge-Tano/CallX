@@ -4,17 +4,23 @@ import { NextResponse } from 'next/server';
 import DigestFetch from 'digest-fetch';
 import { Pool } from 'pg';
 
-// Configuración - CAMBIADO A 1 MINUTO CON HORARIO RESTRINGIDO
+// Configuración con variables de entorno
 const CONFIG = {
     username: process.env.HIKUSER,
     password: process.env.HIKPASS,
     devices: [process.env.HIKVISION_IP1, process.env.HIKVISION_IP2].filter(Boolean),
     timeout: 30000,
-    updateInterval: 1 * 60 * 1000, // 1 minuto en milisegundos
-    // Horario permitido: 3 AM a 10 PM (15 horas activo, 9 horas inactivo)
-    startHour: 3,    // 3:00 AM
-    endHour: 22,     // 10:00 PM (22 en formato 24h)
-    activeHours: 19  // 19 horas de actividad (3 AM a 10 PM)
+    updateInterval: 1 * 60 * 1000,
+    
+    // Horario de ejecución desde variables de entorno
+    startHour: parseInt(process.env.SCHEDULER_START_HOUR || '3'),
+    endHour: parseInt(process.env.SCHEDULER_END_HOUR || '22'),
+    activeHours: 19,
+    
+    // Configuración de rangos de búsqueda desde variables de entorno
+    defaultSearchRange: process.env.DEFAULT_SEARCH_RANGE || 'hoy',
+    maxSearchDays: parseInt(process.env.MAX_SEARCH_DAYS || '90'),
+    minSearchDate: process.env.MIN_SEARCH_DATE || null,
 };
 
 // Configuración PostgreSQL
@@ -45,9 +51,6 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 function isWithinAllowedHours() {
     const now = new Date();
     const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    
-    // Horario permitido: 3 AM (3) a 10 PM (22)
     return currentHour >= CONFIG.startHour && currentHour < CONFIG.endHour;
 }
 
@@ -55,248 +58,62 @@ function isWithinAllowedHours() {
 function getMinutesUntilNextAllowedTime() {
     const now = new Date();
     const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
     
     if (isWithinAllowedHours()) {
-        // Ya estamos en horario permitido, ejecutar ahora
         return 0;
     }
     
     let nextAllowedTime = new Date(now);
     
     if (currentHour < CONFIG.startHour) {
-        // Estamos antes de las 3 AM, esperar hasta las 3 AM
         nextAllowedTime.setHours(CONFIG.startHour, 0, 0, 0);
     } else {
-        // Estamos después de las 10 PM, esperar hasta las 3 AM del siguiente día
         nextAllowedTime.setDate(nextAllowedTime.getDate() + 1);
         nextAllowedTime.setHours(CONFIG.startHour, 0, 0, 0);
     }
     
-    return Math.ceil((nextAllowedTime.getTime() - now.getTime()) / 60000); // minutos
+    return Math.ceil((nextAllowedTime.getTime() - now.getTime()) / 60000);
 }
 
-// Logger optimizado para producción
-const logger = {
-    info: (msg, ...args) => console.log(`[${new Date().toLocaleTimeString('es-CO')}] ℹ️ ${msg}`, ...args),
-    success: (msg, ...args) => console.log(`[${new Date().toLocaleTimeString('es-CO')}] ✅ ${msg}`, ...args),
-    error: (msg, ...args) => console.error(`[${new Date().toLocaleTimeString('es-CO')}] ❌ ${msg}`, ...args),
-    debug: (msg, ...args) => {
-        if (process.env.NODE_ENV === 'development') {
-            console.log(`[${new Date().toLocaleTimeString('es-CO')}] 🐛 ${msg}`, ...args);
-        }
-    },
-    scheduler: (status) => {
-        const now = new Date();
-        const currentHour = now.getHours();
-        const withinHours = isWithinAllowedHours();
-        const minutesUntilNext = getMinutesUntilNextAllowedTime();
-        
-        console.log(`\n⏰ ========================================`);
-        console.log(`⏰ SCHEDULER BIOMÉTRICO CON HORARIO`);
-        console.log(`⏰ ========================================`);
-        console.log(`⏰ Horario activo: ${CONFIG.startHour}:00 - ${CONFIG.endHour}:00`);
-        console.log(`⏰ Hora actual: ${currentHour}:${String(now.getMinutes()).padStart(2, '0')}`);
-        console.log(`⏰ Estado: ${withinHours ? 'ACTIVO 🟢' : 'INACTIVO 🔴'}`);
-        
-        if (status === 'start') {
-            console.log(`⏰ Iniciando scheduler programado...`);
-            if (!withinHours) {
-                console.log(`⏰ ⏳ Esperando ${minutesUntilNext} minutos para horario permitido`);
-            }
-        }
-        
-        console.log(`⏰ Última ejecución: ${lastRun ? lastRun.toLocaleTimeString('es-CO') : 'Nunca'}`);
-        console.log(`⏰ Próxima ejecución: ${nextRun ? nextRun.toLocaleTimeString('es-CO') : 'Programando...'}`);
-        console.log(`⏰ ========================================\n`);
-    },
-    horario: () => {
-        const withinHours = isWithinAllowedHours();
-        const minutesUntilNext = getMinutesUntilNextAllowedTime();
-        
-        if (withinHours) {
-            console.log(`🕒 SCHEDULER: Horario activo (${CONFIG.startHour}:00 - ${CONFIG.endHour}:00)`);
-        } else {
-            console.log(`🕒 SCHEDULER: Horario inactivo. Próxima ejecución en ${minutesUntilNext} minutos`);
-        }
+// Función para validar rango de fechas según configuración
+function validateDateRange(fechaInicio, fechaFin) {
+    const hoy = new Date();
+    const minDate = CONFIG.minSearchDate ? new Date(CONFIG.minSearchDate) : null;
+    const fechaInicioDate = new Date(fechaInicio);
+    const fechaFinDate = new Date(fechaFin);
+    
+    // Validar que las fechas sean válidas
+    if (isNaN(fechaInicioDate.getTime()) || isNaN(fechaFinDate.getTime())) {
+        throw new Error('Fechas inválidas');
     }
-};
-
-// ==================== FUNCIONES PARA LA PÁGINA DE EVENTOS ====================
-
-// Función para calcular estadísticas de eventos
-function calcularEstadisticasEventos(eventos) {
-    const porCampaña = {};
-    const ejecutivos = new Set();
-
-    eventos.forEach(evento => {
-        // Estadísticas por campaña/departamento
-        const campaña = evento.campaña || 'Sin campaña';
-        if (!porCampaña[campaña]) {
-            porCampaña[campaña] = {
-                total: 0,
-                checkIn: 0,
-                checkOut: 0
-            };
-        }
-        porCampaña[campaña].total++;
-
-        // Contar ejecutivos únicos
-        if (evento.nombre) {
-            ejecutivos.add(evento.nombre);
-        }
-    });
-
-    return {
-        porCampaña,
-        ejecutivos: Array.from(ejecutivos)
-    };
-}
-
-// Función para calcular estado del empleado
-function calcularEstadoEmpleado(evento) {
-    const tieneEntrada = evento.hora_entrada !== null;
-    const tieneSalida = evento.hora_salida !== null;
-    const tieneSalidaAlmuerzo = evento.hora_salida_almuerzo !== null;
-    const tieneEntradaAlmuerzo = evento.hora_entrada_almuerzo !== null;
-
-    let estado = 'Incompleto';
-    let estadoColor = 'bg-red-100 text-red-800';
-    let estadoIcono = '❌';
-    let estadoDescripcion = 'Registro incompleto';
-    let tieneProblemas = true;
-    let necesitaRevision = true;
-    let tieneAlmuerzoCompleto = false;
-    let faltas = [];
-    let duracionAlmuerzo = '';
-
-    // Verificar si tiene almuerzo completo
-    if (tieneSalidaAlmuerzo && tieneEntradaAlmuerzo) {
-        tieneAlmuerzoCompleto = true;
-        // Calcular duración del almuerzo
-        const [horaSalida, minutoSalida] = evento.hora_salida_almuerzo.split(':').map(Number);
-        const [horaEntrada, minutoEntrada] = evento.hora_entrada_almuerzo.split(':').map(Number);
-        const minutosTotal = (horaEntrada * 60 + minutoEntrada) - (horaSalida * 60 + minutoSalida);
-        const horas = Math.floor(minutosTotal / 60);
-        const minutos = minutosTotal % 60;
-        duracionAlmuerzo = `${horas}h ${minutos}m`;
+    
+    // Validar que fecha inicio sea anterior o igual a fecha fin
+    if (fechaInicioDate > fechaFinDate) {
+        throw new Error('La fecha de inicio no puede ser posterior a la fecha fin');
     }
-
-    // Determinar faltas
-    if (!tieneEntrada) faltas.push('Entrada');
-    if (!tieneSalida) faltas.push('Salida');
-    if (tieneSalidaAlmuerzo && !tieneEntradaAlmuerzo) faltas.push('Regreso de almuerzo');
-    if (!tieneSalidaAlmuerzo && tieneEntradaAlmuerzo) faltas.push('Salida a almuerzo');
-
-    // Evaluar estado completo
-    if (tieneEntrada && tieneSalida) {
-        if (tieneAlmuerzoCompleto || (!tieneSalidaAlmuerzo && !tieneEntradaAlmuerzo)) {
-            estado = 'Completo';
-            estadoColor = 'bg-green-100 text-green-800';
-            estadoIcono = '✅';
-            estadoDescripcion = 'Registro completo';
-            tieneProblemas = false;
-            necesitaRevision = false;
-        } else if (faltas.length > 0) {
-            estado = 'Parcial';
-            estadoColor = 'bg-yellow-100 text-yellow-800';
-            estadoIcono = '⚠️';
-            estadoDescripcion = faltas.join(', ');
-            tieneProblemas = true;
-            necesitaRevision = true;
-        }
-    } else if (tieneEntrada && !tieneSalida) {
-        estado = 'Pendiente de salida';
-        estadoColor = 'bg-blue-100 text-blue-800';
-        estadoIcono = '⏳';
-        estadoDescripcion = 'Esperando salida';
-        tieneProblemas = true;
-        necesitaRevision = true;
+    
+    // Validar fecha mínima permitida
+    if (minDate && fechaInicioDate < minDate) {
+        throw new Error(`La fecha mínima permitida es ${minDate.toISOString().split('T')[0]}`);
     }
-
-    return {
-        estado,
-        estadoColor,
-        estadoIcono,
-        estadoDescripcion,
-        tieneProblemas,
-        necesitaRevision,
-        tieneAlmuerzoCompleto,
-        faltas,
-        duracionAlmuerzo
-    };
-}
-
-async function obtenerCampañaDesdeBD(documento) {
-    if (!documento) return 'General';
-
-    try {
-        const query = `
-            SELECT departamento 
-            FROM usuarios_hikvision 
-            WHERE employee_no = $1 
-            AND estado = 'Activo'
-            LIMIT 1
-        `;
-
-        const result = await pool.query(query, [documento]);
-
-        if (result.rows.length > 0) {
-            return result.rows[0].departamento || 'General';
-        }
-
-        return 'General';
-    } catch (error) {
-        logger.debug(`Error obteniendo campaña para ${documento}: ${error.message}`);
-        return 'General';
+    
+    // Validar que no se busquen fechas futuras
+    if (fechaFinDate > hoy) {
+        throw new Error('No se pueden buscar fechas futuras');
     }
+    
+    // Validar máximo de días permitidos
+    const diffTime = Math.abs(fechaFinDate - fechaInicioDate);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (diffDays > CONFIG.maxSearchDays) {
+        throw new Error(`El rango máximo permitido es ${CONFIG.maxSearchDays} días`);
+    }
+    
+    return { fechaInicioDate, fechaFinDate };
 }
 
-// Función para obtener campaña/departamento del documento
-function obtenerCampaña(documento) {
-    // Aquí puedes implementar lógica para mapear documentos a campañas
-    // Por ahora, devolver un valor genérico
-    return 'General';
-}
-
-// Función para formatear eventos desde la BD para la página
-function formatearEventosParaFrontend(registros) {
-    return registros.map(registro => {
-        const estadoInfo = calcularEstadoEmpleado(registro);
-
-        // 🔥 Usar la campaña de la BD si existe, si no usar 'General'
-        const campaña = registro.campaña || 'General';
-
-        return {
-            id: registro.id,
-            empleadoId: registro.documento || '',
-            nombre: registro.nombre || 'Sin nombre',
-            fecha: registro.fecha ? new Date(registro.fecha).toISOString().split('T')[0] : '',
-            horaEntrada: registro.hora_entrada || '',
-            horaSalida: registro.hora_salida || '',
-            horaSalidaAlmuerzo: registro.hora_salida_almuerzo || '',
-            horaEntradaAlmuerzo: registro.hora_entrada_almuerzo || '',
-            duracionAlmuerzo: estadoInfo.duracionAlmuerzo,
-            campaña: campaña, // 🔥 Usar campaña real de la BD
-            tipo: 'Biométrico',
-            subtipo: 'Asistencia',
-            estado: estadoInfo.estado,
-            estadoColor: estadoInfo.estadoColor,
-            estadoIcono: estadoInfo.estadoIcono,
-            estadoDescripcion: estadoInfo.estadoDescripcion,
-            faltas: estadoInfo.faltas,
-            tieneProblemas: estadoInfo.tieneProblemas,
-            necesitaRevision: estadoInfo.necesitaRevision,
-            tieneAlmuerzoCompleto: estadoInfo.tieneAlmuerzoCompleto,
-            dispositivo: registro.dispositivo_ip || 'Desconocido',
-            imagen: registro.imagen || null,
-        };
-    });
-}
-
-// ==================== SCHEDULER AUTOMÁTICO CON HORARIO ====================
-
-// Cliente Hikvision optimizado
+// Cliente Hikvision
 class HikvisionDebugClient {
     constructor(deviceIp) {
         this.deviceIp = deviceIp;
@@ -334,7 +151,6 @@ class HikvisionDebugClient {
             const responseText = await res.text();
 
             if (!res.ok) {
-                logger.error(`${this.deviceIp}: HTTP ${res.status}`);
                 return {
                     error: `HTTP ${res.status}`,
                     deviceIp: this.deviceIp
@@ -351,7 +167,6 @@ class HikvisionDebugClient {
             };
 
         } catch (error) {
-            logger.error(`${this.deviceIp}: ${error.message}`);
             return {
                 error: error.message,
                 deviceIp: this.deviceIp
@@ -360,12 +175,10 @@ class HikvisionDebugClient {
     }
 }
 
-// Función para obtener eventos de un dispositivo (optimizada)
+// Función para obtener eventos de un dispositivo
 async function getAllEventsFromDevice(deviceIp, startTime, endTime, maxBatches = 10) {
     const client = new HikvisionDebugClient(deviceIp);
     const todosLosEventos = [];
-
-    logger.info(`${deviceIp}: Consultando eventos...`);
 
     let position = 0;
     let batchNumber = 1;
@@ -423,121 +236,178 @@ function getDateRange(fechaStr) {
     return { inicio, fin };
 }
 
-// Función principal para actualizar datos con verificación de horario
-async function updateBiometricData(fechaEspecifica = null) {
-    // Verificar si estamos en horario permitido
-    if (!isWithinAllowedHours()) {
-        const now = new Date();
-        const currentHour = now.getHours();
-        const minutesUntilNext = getMinutesUntilNextAllowedTime();
-        
-        logger.info(`Fuera de horario permitido (${currentHour}:00). Próxima ejecución en ${minutesUntilNext} minutos`);
+// Función para calcular estado del empleado
+function calcularEstadoEmpleado(evento) {
+    const tieneEntrada = evento.hora_entrada !== null;
+    const tieneSalida = evento.hora_salida !== null;
+    const tieneSalidaAlmuerzo = evento.hora_salida_almuerzo !== null;
+    const tieneEntradaAlmuerzo = evento.hora_entrada_almuerzo !== null;
+
+    let estado = 'Incompleto';
+    let estadoColor = 'bg-red-100 text-red-800';
+    let estadoIcono = '❌';
+    let estadoDescripcion = 'Registro incompleto';
+    let tieneProblemas = true;
+    let necesitaRevision = true;
+    let tieneAlmuerzoCompleto = false;
+    let faltas = [];
+    let duracionAlmuerzo = '';
+
+    if (tieneSalidaAlmuerzo && tieneEntradaAlmuerzo) {
+        tieneAlmuerzoCompleto = true;
+        const [horaSalida, minutoSalida] = evento.hora_salida_almuerzo.split(':').map(Number);
+        const [horaEntrada, minutoEntrada] = evento.hora_entrada_almuerzo.split(':').map(Number);
+        const minutosTotal = (horaEntrada * 60 + minutoEntrada) - (horaSalida * 60 + minutoSalida);
+        const horas = Math.floor(minutosTotal / 60);
+        const minutos = minutosTotal % 60;
+        duracionAlmuerzo = `${horas}h ${minutos}m`;
+    }
+
+    if (!tieneEntrada) faltas.push('Entrada');
+    if (!tieneSalida) faltas.push('Salida');
+    if (tieneSalidaAlmuerzo && !tieneEntradaAlmuerzo) faltas.push('Regreso de almuerzo');
+    if (!tieneSalidaAlmuerzo && tieneEntradaAlmuerzo) faltas.push('Salida a almuerzo');
+
+    if (tieneEntrada && tieneSalida) {
+        if (tieneAlmuerzoCompleto || (!tieneSalidaAlmuerzo && !tieneEntradaAlmuerzo)) {
+            estado = 'Completo';
+            estadoColor = 'bg-green-100 text-green-800';
+            estadoIcono = '✅';
+            estadoDescripcion = 'Registro completo';
+            tieneProblemas = false;
+            necesitaRevision = false;
+        } else if (faltas.length > 0) {
+            estado = 'Parcial';
+            estadoColor = 'bg-yellow-100 text-yellow-800';
+            estadoIcono = '⚠️';
+            estadoDescripcion = faltas.join(', ');
+            tieneProblemas = true;
+            necesitaRevision = true;
+        }
+    } else if (tieneEntrada && !tieneSalida) {
+        estado = 'Pendiente de salida';
+        estadoColor = 'bg-blue-100 text-blue-800';
+        estadoIcono = '⏳';
+        estadoDescripcion = 'Esperando salida';
+        tieneProblemas = true;
+        necesitaRevision = true;
+    }
+
+    return {
+        estado,
+        estadoColor,
+        estadoIcono,
+        estadoDescripcion,
+        tieneProblemas,
+        necesitaRevision,
+        tieneAlmuerzoCompleto,
+        faltas,
+        duracionAlmuerzo
+    };
+}
+
+// Función para calcular estadísticas de eventos
+function calcularEstadisticasEventos(eventos) {
+    const porCampaña = {};
+    const ejecutivos = new Set();
+
+    eventos.forEach(evento => {
+        const campaña = evento.campaña || 'Sin campaña';
+        if (!porCampaña[campaña]) {
+            porCampaña[campaña] = {
+                total: 0,
+                checkIn: 0,
+                checkOut: 0
+            };
+        }
+        porCampaña[campaña].total++;
+
+        if (evento.nombre) {
+            ejecutivos.add(evento.nombre);
+        }
+    });
+
+    return {
+        porCampaña,
+        ejecutivos: Array.from(ejecutivos)
+    };
+}
+
+// Función para formatear eventos desde la BD para la página
+function formatearEventosParaFrontend(registros) {
+    return registros.map(registro => {
+        const estadoInfo = calcularEstadoEmpleado(registro);
+        const campaña = registro.campaña || 'General';
+
         return {
-            success: false,
-            message: `Fuera de horario permitido (${CONFIG.startHour}:00 - ${CONFIG.endHour}:00)`,
-            currentHour: currentHour,
-            nextExecutionIn: `${minutesUntilNext} minutos`
+            id: registro.id,
+            empleadoId: registro.documento || '',
+            nombre: registro.nombre || 'Sin nombre',
+            fecha: registro.fecha ? new Date(registro.fecha).toISOString().split('T')[0] : '',
+            horaEntrada: registro.hora_entrada || '',
+            horaSalida: registro.hora_salida || '',
+            horaSalidaAlmuerzo: registro.hora_salida_almuerzo || '',
+            horaEntradaAlmuerzo: registro.hora_entrada_almuerzo || '',
+            duracionAlmuerzo: estadoInfo.duracionAlmuerzo,
+            campaña: campaña,
+            tipo: 'Biométrico',
+            subtipo: 'Asistencia',
+            estado: estadoInfo.estado,
+            estadoColor: estadoInfo.estadoColor,
+            estadoIcono: estadoInfo.estadoIcono,
+            estadoDescripcion: estadoInfo.estadoDescripcion,
+            faltas: estadoInfo.faltas,
+            tieneProblemas: estadoInfo.tieneProblemas,
+            necesitaRevision: estadoInfo.necesitaRevision,
+            tieneAlmuerzoCompleto: estadoInfo.tieneAlmuerzoCompleto,
+            dispositivo: registro.dispositivo_ip || 'Desconocido',
+            imagen: registro.imagen || null,
         };
-    }
+    });
+}
 
-    if (isRunning) {
-        logger.info("Actualización ya en progreso, omitiendo...");
-        return { success: false, message: "Ya se está ejecutando" };
+// Función para obtener información de usuarios
+async function obtenerInfoUsuarios(documentos) {
+    if (!documentos || documentos.length === 0) {
+        return {};
     }
-
-    isRunning = true;
-    const startTime = Date.now();
 
     try {
-        logger.horario();
+        const placeholders = documentos.map((_, index) => `$${index + 1}`).join(',');
+        const query = `
+            SELECT 
+                employee_no as documento,
+                nombre,
+                departamento,
+                tipo_usuario,
+                estado,
+                genero
+            FROM usuarios_hikvision 
+            WHERE employee_no IN (${placeholders})
+            AND estado = 'Activo'
+        `;
 
-        // Determinar rango de tiempo
-        let rango;
-        if (fechaEspecifica) {
-            rango = getDateRange(fechaEspecifica);
-            logger.info(`Fecha específica: ${fechaEspecifica}`);
-        } else {
-            rango = getTodayRange();
-            logger.info(`Día actual: ${rango.inicio.toLocaleDateString('es-CO')}`);
-        }
+        const result = await pool.query(query, documentos);
+        const infoPorDocumento = {};
 
-        const startTimeFormatted = formatHikvisionDate(rango.inicio);
-        const endTimeFormatted = formatHikvisionDate(rango.fin);
-
-        // Consultar todos los dispositivos
-        logger.info(`Consultando ${CONFIG.devices.length} dispositivos...`);
-
-        const resultados = await Promise.allSettled(
-            CONFIG.devices.map(deviceIp =>
-                getAllEventsFromDevice(deviceIp, startTimeFormatted, endTimeFormatted, 15)
-            )
-        );
-
-        // Procesar resultados
-        const eventosPorDispositivo = {};
-        let totalEventosRaw = 0;
-
-        for (let i = 0; i < resultados.length; i++) {
-            const resultado = resultados[i];
-            const deviceIp = CONFIG.devices[i];
-
-            if (resultado.status === 'fulfilled') {
-                const data = resultado.value;
-                eventosPorDispositivo[deviceIp] = data.eventos;
-                totalEventosRaw += data.totalEventos;
-
-                if (data.totalEventos > 0) {
-                    logger.success(`${deviceIp}: ${data.totalEventos} eventos`);
-                }
-            } else {
-                eventosPorDispositivo[deviceIp] = [];
-                logger.error(`${deviceIp}: Error en consulta`);
-            }
-        }
-
-        // Guardar en base de datos
-        if (totalEventosRaw > 0) {
-            const dbResult = await saveEventsToPostgreSQL(eventosPorDispositivo);
-            logger.success(`BD: ${dbResult.saved} registros actualizados`);
-
-            lastRun = new Date();
-            nextRun = new Date(lastRun.getTime() + CONFIG.updateInterval);
-
-            const elapsed = Date.now() - startTime;
-            logger.success(`Actualización completada en ${elapsed}ms`);
-
-            return {
-                success: true,
-                timestamp: new Date().toISOString(),
-                eventosProcesados: totalEventosRaw,
-                registrosActualizados: dbResult.saved,
-                errores: dbResult.errors,
-                tiempoMs: elapsed
+        result.rows.forEach(row => {
+            infoPorDocumento[row.documento] = {
+                nombre: row.nombre,
+                departamento: row.departamento,
+                tipo_usuario: row.tipo_usuario,
+                estado: row.estado,
+                genero: row.genero
             };
-        } else {
-            logger.info("No se encontraron eventos nuevos");
-            return {
-                success: true,
-                message: "No hay eventos nuevos",
-                eventosProcesados: 0
-            };
-        }
+        });
 
+        return infoPorDocumento;
     } catch (error) {
-        logger.error(`Error en actualización: ${error.message}`);
-        return {
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString()
-        };
-    } finally {
-        isRunning = false;
+        return {};
     }
 }
 
-// Función optimizada para guardar en PostgreSQL con campaña/departamento
+// Función para guardar en PostgreSQL
 async function saveEventsToPostgreSQL(eventsByDevice) {
-    // 1. Combinar todos los eventos
     const todosLosEventos = [];
     Object.entries(eventsByDevice).forEach(([deviceIp, eventos]) => {
         if (eventos && Array.isArray(eventos)) {
@@ -554,21 +424,11 @@ async function saveEventsToPostgreSQL(eventsByDevice) {
         return { saved: 0, errors: 0 };
     }
 
-    logger.info(`Procesando ${todosLosEventos.length} eventos...`);
-
-    // 2. Obtener información de usuarios (documentos únicos)
     const documentosUnicos = [...new Set(todosLosEventos
         .filter(evento => evento.employeeNoString || evento.cardNo)
         .map(evento => evento.employeeNoString || evento.cardNo))];
 
-    logger.info(`Consultando información de ${documentosUnicos.length} usuarios...`);
-
-    // Obtener campañas/departamentos de usuarios_hikvision
     const usuariosInfo = await obtenerInfoUsuarios(documentosUnicos);
-
-    logger.info(`Información obtenida de ${Object.keys(usuariosInfo).length} usuarios`);
-
-    // 3. Procesar eventos básicos con información de usuario
     const eventosProcesados = [];
 
     for (const event of todosLosEventos) {
@@ -586,7 +446,6 @@ async function saveEventsToPostgreSQL(eventsByDevice) {
 
             if (!fecha || !hora) continue;
 
-            // Obtener campaña/departamento del usuario
             const infoUsuario = usuariosInfo[documento] || {};
 
             eventosProcesados.push({
@@ -600,13 +459,11 @@ async function saveEventsToPostgreSQL(eventsByDevice) {
                 departamento: infoUsuario.departamento || null,
             });
         } catch (error) {
-            logger.debug(`Error procesando evento: ${error.message}`);
+            continue;
         }
     }
 
-    // 4. Agrupar por documento y fecha
     const gruposPorFecha = {};
-
     eventosProcesados.forEach(evento => {
         const key = `${evento.documento}_${evento.fecha}`;
 
@@ -644,19 +501,16 @@ async function saveEventsToPostgreSQL(eventsByDevice) {
         }
     });
 
-    // 5. Guardar en base de datos
     let saved = 0;
     let errors = 0;
 
     for (const grupo of Object.values(gruposPorFecha)) {
         try {
-            // Ordenar horas
             grupo.checkIns.sort();
             grupo.checkOuts.sort();
             grupo.breakOuts.sort();
             grupo.breakIns.sort();
 
-            // Determinar valores finales
             const valores = {
                 hora_entrada: grupo.checkIns[0] || null,
                 hora_salida: grupo.checkOuts[grupo.checkOuts.length - 1] || null,
@@ -664,7 +518,6 @@ async function saveEventsToPostgreSQL(eventsByDevice) {
                 hora_entrada_almuerzo: grupo.breakIns[grupo.breakIns.length - 1] || null
             };
 
-            // Solo guardar si hay datos
             if (!valores.hora_entrada && !valores.hora_salida &&
                 !valores.hora_salida_almuerzo && !valores.hora_entrada_almuerzo) {
                 continue;
@@ -675,7 +528,6 @@ async function saveEventsToPostgreSQL(eventsByDevice) {
                 ? Array.from(grupo.dispositivos_ip)[0]
                 : 'multiple';
 
-            // 🔥 QUERY CORREGIDA - Usar departamento como campaña
             const query = `
                 INSERT INTO eventos_procesados (
                     documento, nombre, fecha, 
@@ -715,81 +567,98 @@ async function saveEventsToPostgreSQL(eventsByDevice) {
             ]);
 
             saved++;
-
         } catch (error) {
             errors++;
-            logger.debug(`Error guardando ${grupo.documento}-${grupo.fecha}: ${error.message}`);
         }
     }
 
-    logger.success(`Guardados ${saved} registros con información de campaña/departamento`);
     return { saved, errors };
 }
 
-// 🔥 NUEVA FUNCIÓN: Obtener información de usuarios desde usuarios_hikvision
-async function obtenerInfoUsuarios(documentos) {
-    if (!documentos || documentos.length === 0) {
-        return {};
+// Función principal para actualizar datos
+async function updateBiometricData(fechaEspecifica = null) {
+    if (!isWithinAllowedHours()) {
+        const now = new Date();
+        const currentHour = now.getHours();
+        const minutesUntilNext = getMinutesUntilNextAllowedTime();
+        return {
+            success: false,
+            message: `Fuera de horario permitido (${CONFIG.startHour}:00 - ${CONFIG.endHour}:00)`,
+            currentHour: currentHour,
+            nextExecutionIn: `${minutesUntilNext} minutos`
+        };
     }
 
-    try {
-        const placeholders = documentos.map((_, index) => `$${index + 1}`).join(',');
-
-        const query = `
-            SELECT 
-                employee_no as documento,
-                nombre,
-                departamento,  -- ← Usa departamento aquí (NO campaña)
-                tipo_usuario,
-                estado,
-                genero
-            FROM usuarios_hikvision 
-            WHERE employee_no IN (${placeholders})
-            AND estado = 'Activo'
-        `;
-
-        const result = await pool.query(query, documentos);
-
-        const infoPorDocumento = {};
-        result.rows.forEach(row => {
-            infoPorDocumento[row.documento] = {
-                nombre: row.nombre,
-                departamento: row.departamento,  // ← departamento, no campaña
-                tipo_usuario: row.tipo_usuario,
-                estado: row.estado,
-                genero: row.genero
-            };
-        });
-
-        return infoPorDocumento;
-    } catch (error) {
-        logger.error(`Error obteniendo información de usuarios: ${error.message}`);
-        return {};
+    if (isRunning) {
+        return { success: false, message: "Ya se está ejecutando" };
     }
-}
 
-// ==================== ENDPOINTS PARA LA PÁGINA DE EVENTOS ====================
+    isRunning = true;
+    const startTime = Date.now();
 
-// Endpoint GET para la página de eventos
-export async function GET(request) {
     try {
-        const url = new URL(request.url);
-        const pathname = url.pathname;
-
-        // Detectar si es una llamada desde la página de eventos (/bd)
-        if (pathname.includes('/bd') || url.searchParams.get('rango')) {
-            return await handleEventosPageRequest(request);
+        let rango;
+        if (fechaEspecifica) {
+            rango = getDateRange(fechaEspecifica);
+        } else {
+            rango = getTodayRange();
         }
 
-        // Si no, usar el endpoint original del debug-biometrico
-        return await handleBiometricRequest(request);
+        const startTimeFormatted = formatHikvisionDate(rango.inicio);
+        const endTimeFormatted = formatHikvisionDate(rango.fin);
+
+        const resultados = await Promise.allSettled(
+            CONFIG.devices.map(deviceIp =>
+                getAllEventsFromDevice(deviceIp, startTimeFormatted, endTimeFormatted, 15)
+            )
+        );
+
+        const eventosPorDispositivo = {};
+        let totalEventosRaw = 0;
+
+        for (let i = 0; i < resultados.length; i++) {
+            const resultado = resultados[i];
+            const deviceIp = CONFIG.devices[i];
+
+            if (resultado.status === 'fulfilled') {
+                const data = resultado.value;
+                eventosPorDispositivo[deviceIp] = data.eventos;
+                totalEventosRaw += data.totalEventos;
+            } else {
+                eventosPorDispositivo[deviceIp] = [];
+            }
+        }
+
+        if (totalEventosRaw > 0) {
+            const dbResult = await saveEventsToPostgreSQL(eventosPorDispositivo);
+            lastRun = new Date();
+            nextRun = new Date(lastRun.getTime() + CONFIG.updateInterval);
+
+            const elapsed = Date.now() - startTime;
+            return {
+                success: true,
+                timestamp: new Date().toISOString(),
+                eventosProcesados: totalEventosRaw,
+                registrosActualizados: dbResult.saved,
+                errores: dbResult.errors,
+                tiempoMs: elapsed
+            };
+        } else {
+            return {
+                success: true,
+                message: "No hay eventos nuevos",
+                eventosProcesados: 0
+            };
+        }
 
     } catch (error) {
-        logger.error(`Error en GET general: ${error.message}`);
-        return NextResponse.json({
+        return {
             success: false,
-            error: error.message
-        }, { status: 500 });
+            error: error.message,
+            timestamp: new Date().toISOString()
+        };
+    } finally {
+        isRunning = false;
     }
 }
 
@@ -797,15 +666,12 @@ export async function GET(request) {
 async function handleEventosPageRequest(request) {
     try {
         const url = new URL(request.url);
-        const rango = url.searchParams.get('rango') || 'hoy';
+        const rango = url.searchParams.get('rango') || CONFIG.defaultSearchRange;
         const fechaInicio = url.searchParams.get('fechaInicio');
         const fechaFin = url.searchParams.get('fechaFin');
         const departamento = url.searchParams.get('departamento');
         const ejecutivo = url.searchParams.get('ejecutivo');
 
-        logger.info(`📊 Página eventos: rango=${rango}, inicio=${fechaInicio}, fin=${fechaFin}`);
-
-        // Construir query dinámica
         let query = `
             SELECT id, documento, nombre, fecha, 
                    hora_entrada, hora_salida, 
@@ -818,7 +684,6 @@ async function handleEventosPageRequest(request) {
         const params = [];
         let paramIndex = 1;
 
-        // Aplicar filtro de rango de fechas
         if (rango === 'hoy') {
             query += ` AND fecha = CURRENT_DATE`;
         } else if (rango === '7dias') {
@@ -826,41 +691,41 @@ async function handleEventosPageRequest(request) {
         } else if (rango === '30dias') {
             query += ` AND fecha >= CURRENT_DATE - INTERVAL '29 days'`;
         } else if (rango === 'personalizado' && fechaInicio && fechaFin) {
-            query += ` AND fecha BETWEEN $${paramIndex} AND $${paramIndex + 1}`;
-            params.push(fechaInicio, fechaFin);
-            paramIndex += 2;
+            // Validar rango de fechas según configuración
+            try {
+                validateDateRange(fechaInicio, fechaFin);
+                query += ` AND fecha BETWEEN $${paramIndex} AND $${paramIndex + 1}`;
+                params.push(fechaInicio, fechaFin);
+                paramIndex += 2;
+            } catch (validationError) {
+                return NextResponse.json({
+                    success: false,
+                    error: validationError.message,
+                    config: {
+                        maxSearchDays: CONFIG.maxSearchDays,
+                        minSearchDate: CONFIG.minSearchDate
+                    }
+                }, { status: 400 });
+            }
         }
 
-        // Aplicar filtro de departamento/campaña
         if (departamento) {
             query += ` AND (campaña ILIKE $${paramIndex} OR $${paramIndex} = 'Todos' OR $${paramIndex} = 'todos')`;
             params.push(`%${departamento}%`);
             paramIndex++;
         }
 
-        // Aplicar filtro de ejecutivo
         if (ejecutivo) {
             query += ` AND nombre ILIKE $${paramIndex}`;
             params.push(`%${ejecutivo}%`);
             paramIndex++;
         }
 
-        // Ordenar por fecha y documento
         query += ` ORDER BY fecha DESC, documento`;
-
-        logger.debug(`Query: ${query}`);
-        logger.debug(`Params: ${JSON.stringify(params)}`);
-
         const result = await pool.query(query, params);
         const registros = result.rows;
-
-        // Formatear eventos para el frontend
         const eventosFormateados = formatearEventosParaFrontend(registros);
-
-        // Calcular estadísticas
         const estadisticas = calcularEstadisticasEventos(eventosFormateados);
-
-        logger.success(`✅ ${registros.length} eventos cargados para la página`);
 
         return NextResponse.json({
             success: true,
@@ -871,7 +736,6 @@ async function handleEventosPageRequest(request) {
         });
 
     } catch (error) {
-        logger.error(`Error en handleEventosPageRequest: ${error.message}`);
         return NextResponse.json({
             success: false,
             error: error.message,
@@ -881,7 +745,7 @@ async function handleEventosPageRequest(request) {
     }
 }
 
-// Handler para peticiones del debug-biometrico (compatibilidad)
+// Handler para peticiones del debug-biometrico
 async function handleBiometricRequest(request) {
     try {
         const url = new URL(request.url);
@@ -889,7 +753,6 @@ async function handleBiometricRequest(request) {
         const fecha = url.searchParams.get('fecha');
         const force = url.searchParams.get('force') === 'true';
 
-        // Acción especial: forzar actualización (ignora horario)
         if (action === 'force-update') {
             const result = await updateBiometricData(fecha);
             return NextResponse.json({
@@ -906,7 +769,6 @@ async function handleBiometricRequest(request) {
             });
         }
 
-        // Acción especial: estado del scheduler
         if (action === 'status') {
             return NextResponse.json({
                 success: true,
@@ -932,31 +794,23 @@ async function handleBiometricRequest(request) {
             });
         }
 
-        // Consulta normal (compatibilidad con código anterior)
         const dispositivoEspecifico = url.searchParams.get('device');
         const saveToDB = url.searchParams.get('save') === 'true';
         const consultarTodos = url.searchParams.get('todos') === 'true' || !dispositivoEspecifico;
 
         let dispositivosAConsultar = [];
-
         if (dispositivoEspecifico) {
             dispositivosAConsultar = [dispositivoEspecifico];
-            logger.info(`Consulta manual dispositivo: ${dispositivoEspecifico}`);
         } else if (consultarTodos) {
             dispositivosAConsultar = CONFIG.devices;
-            logger.info(`Consulta manual todos los dispositivos`);
         } else {
             dispositivosAConsultar = [CONFIG.devices[0]];
         }
 
-        // Usar fecha específica o día actual
         const rango = fecha ? getDateRange(fecha) : getTodayRange();
         const startTime = formatHikvisionDate(rango.inicio);
         const endTime = formatHikvisionDate(rango.fin);
 
-        logger.info(`Consulta manual: ${startTime} a ${endTime}`);
-
-        // Consultar dispositivos
         const resultados = await Promise.allSettled(
             dispositivosAConsultar.map(deviceIp =>
                 getAllEventsFromDevice(deviceIp, startTime, endTime, 5)
@@ -980,7 +834,6 @@ async function handleBiometricRequest(request) {
             }
         }
 
-        // Guardar si se solicita
         let dbResult = null;
         if (saveToDB) {
             const totalEventos = Object.values(eventosPorDispositivo)
@@ -988,7 +841,6 @@ async function handleBiometricRequest(request) {
 
             if (totalEventos > 0) {
                 dbResult = await saveEventsToPostgreSQL(eventosPorDispositivo);
-                logger.info(`Guardados ${dbResult.saved} registros`);
             }
         }
 
@@ -1018,7 +870,6 @@ async function handleBiometricRequest(request) {
         });
 
     } catch (error) {
-        logger.error(`Error en handleBiometricRequest: ${error.message}`);
         return NextResponse.json({
             success: false,
             error: error.message
@@ -1026,13 +877,32 @@ async function handleBiometricRequest(request) {
     }
 }
 
-// POST - Para consultas personalizadas
+// Endpoint GET principal
+export async function GET(request) {
+    try {
+        const url = new URL(request.url);
+        const pathname = url.pathname;
+
+        if (pathname.includes('/bd') || url.searchParams.get('rango')) {
+            return await handleEventosPageRequest(request);
+        }
+
+        return await handleBiometricRequest(request);
+
+    } catch (error) {
+        return NextResponse.json({
+            success: false,
+            error: error.message
+        }, { status: 500 });
+    }
+}
+
+// POST
 export async function POST(request) {
     try {
         const body = await request.json();
         const { fecha, forceUpdate = false, ignoreSchedule = false } = body;
 
-        // Si es forceUpdate o ignoreSchedule, ignorar horario
         if (forceUpdate || ignoreSchedule) {
             const result = await updateBiometricData(fecha);
             return NextResponse.json({
@@ -1042,7 +912,6 @@ export async function POST(request) {
             });
         }
 
-        // Por defecto, consultar día actual respetando horario
         const result = await updateBiometricData(fecha);
 
         return NextResponse.json({
@@ -1052,7 +921,6 @@ export async function POST(request) {
         });
 
     } catch (error) {
-        logger.error(`Error POST: ${error.message}`);
         return NextResponse.json({
             success: false,
             error: error.message
@@ -1060,13 +928,12 @@ export async function POST(request) {
     }
 }
 
-// PUT - Para estadísticas y verificación
+// PUT
 export async function PUT(request) {
     try {
         const url = new URL(request.url);
         const action = url.searchParams.get('action') || 'stats';
         const limit = parseInt(url.searchParams.get('limit') || '10');
-        const documento = url.searchParams.get('documento');
 
         let query = '';
         let params = [];
@@ -1127,7 +994,6 @@ export async function PUT(request) {
         });
 
     } catch (error) {
-        logger.error(`Error PUT: ${error.message}`);
         return NextResponse.json({
             success: false,
             error: error.message
@@ -1135,57 +1001,26 @@ export async function PUT(request) {
     }
 }
 
-// ==================== INICIAR SCHEDULER AUTOMÁTICO CON HORARIO ====================
-
+// Iniciar scheduler automático
 if (typeof global.schedulerStarted === 'undefined') {
     global.schedulerStarted = true;
 
-    // Función para ejecutar el scheduler con verificación de horario
     function runSchedulerWithSchedule() {
         if (isWithinAllowedHours()) {
-            // Ejecutar si estamos en horario permitido
-            updateBiometricData().catch(error => {
-                logger.error(`Error en ejecución programada: ${error.message}`);
-            });
-        } else {
-            // Solo loguear fuera de horario (no ejecutar)
-            const now = new Date();
-            const currentHour = now.getHours();
-            const minutesUntilNext = getMinutesUntilNextAllowedTime();
-            
-            if (minutesUntilNext < 5) {
-                // Si estamos cerca del horario (menos de 5 minutos), loguear
-                logger.info(`Scheduler en pausa. Hora actual: ${currentHour}:00. Reanuda en ${minutesUntilNext} minutos`);
-            }
+            updateBiometricData().catch(error => {});
         }
     }
 
-    // Esperar a que la app inicie
     setTimeout(() => {
-        logger.scheduler('start');
-
-        // Ejecutar inmediatamente si estamos en horario permitido
         if (isWithinAllowedHours()) {
-            updateBiometricData().catch(console.error);
-        } else {
-            const minutesUntilNext = getMinutesUntilNextAllowedTime();
-            logger.info(`Esperando ${minutesUntilNext} minutos para horario permitido...`);
+            updateBiometricData().catch(error => {});
         }
 
-        // Programar ejecuciones periódicas CADA 1 MINUTO
         schedulerInterval = setInterval(() => {
             runSchedulerWithSchedule();
-        }, CONFIG.updateInterval); // 1 minuto = 60000ms
+        }, CONFIG.updateInterval);
 
-        logger.success(`Scheduler con horario iniciado: ${CONFIG.startHour}:00 - ${CONFIG.endHour}:00`);
-        logger.success(`Actualización cada ${CONFIG.updateInterval / 60000} minutos durante horario activo`);
-
-        // También programar un check diario para logs de estado
-        setInterval(() => {
-            logger.horario();
-        }, 30 * 60 * 1000); // Log cada 30 minutos
-
-    }, 10000); // Esperar 10 segundos al inicio
+    }, 10000);
 }
 
 export const dynamic = 'force-dynamic';
