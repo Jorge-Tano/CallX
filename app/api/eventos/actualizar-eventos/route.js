@@ -29,14 +29,14 @@ const pgConfig = {
 
 const pool = new Pool(pgConfig);
 
-// Logger
+// Logger mejorado
 const logger = {
     info: (msg, ...args) => console.log(`[${new Date().toLocaleTimeString('es-CO')}] ℹ️ ${msg}`, ...args),
     success: (msg, ...args) => console.log(`[${new Date().toLocaleTimeString('es-CO')}] ✅ ${msg}`, ...args),
     error: (msg, ...args) => console.error(`[${new Date().toLocaleTimeString('es-CO')}] ❌ ${msg}`, ...args),
-    warn: (msg, ...args) => console.warn(`[${new Date().toLocaleTimeString('es-CO')}] ⚠️ ${msg}`, ...args), // <-- AÑADIR ESTA LÍNEA
+    warn: (msg, ...args) => console.warn(`[${new Date().toLocaleTimeString('es-CO')}] ⚠️ ${msg}`, ...args),
     debug: (msg, ...args) => {
-        if (process.env.NODE_ENV === 'development') {
+        if (process.env.NODE_ENV === 'development' || process.env.DEBUG_MODE === 'true') {
             console.log(`[${new Date().toLocaleTimeString('es-CO')}] 🐛 ${msg}`, ...args);
         }
     }
@@ -56,13 +56,13 @@ const formatHikvisionDate = (date) => {
 };
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Cliente Hikvision CON manejo de sesión mejorado
+// ==================== CLIENTE HIKVISION MEJORADO ====================
+
 class HikvisionHistoricalClient {
     constructor(deviceIp) {
         this.deviceIp = deviceIp;
         this.baseUrl = `https://${deviceIp}/ISAPI/AccessControl/AcsEvent?format=json`;
         this.client = null;
-        this.lastRequestTime = 0;
         this.requestCount = 0;
         this.reauthenticate();
     }
@@ -70,78 +70,69 @@ class HikvisionHistoricalClient {
     reauthenticate() {
         // Crear nuevo cliente con credenciales frescas
         this.client = new DigestFetch(CONFIG.username, CONFIG.password, {
-            disableRetry: false,  // Habilitar reintentos
+            disableRetry: true,  // IMPORTANTE: Deshabilitar reintentos automáticos
             algorithm: 'MD5'
         });
         this.requestCount = 0;
-        this.lastRequestTime = Date.now();
         logger.debug(`${this.deviceIp}: Nueva autenticación creada`);
     }
 
     async fetchEventsRaw(startTime, endTime, position = 0) {
-        // Reiniciar autenticación después de cierto número de peticiones
-        if (this.requestCount >= 5) {  // Reiniciar cada 5 peticiones
-            logger.debug(`${this.deviceIp}: Reiniciando autenticación (${this.requestCount} peticiones)`);
-            this.reauthenticate();
+        // Controlar frecuencia de peticiones
+        if (this.requestCount > 0) {
+            await delay(CONFIG.batchDelay);
         }
+
+        this.requestCount++;
 
         // Body EXACTO como en el ejemplo de Postman
         const body = {
             AcsEventCond: {
                 searchID: `hist_${this.deviceIp}_${Date.now()}_${position}`,
                 searchResultPosition: position,
-                maxResults: 30, // ¡IMPORTANTE! Usar 30 en lugar de 100
+                maxResults: CONFIG.batchSize, // Usar batchSize configurable
                 major: 5,
                 minor: 75,
                 startTime: startTime,
-                endTime: endTime
+                endTime: endTime,
+                reportMode: 'customize', // Agregar para mejor compatibilidad
+                eventType: 'attendance'  // Especificar que queremos eventos de asistencia
             }
         };
 
-        this.requestCount++;
-
         try {
+            logger.debug(`${this.deviceIp}: Petición #${this.requestCount}, posición ${position}`);
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), CONFIG.timeout);
+
             const res = await this.client.fetch(this.baseUrl, {
                 method: "POST",
                 body: JSON.stringify(body),
                 headers: {
                     "Content-Type": "application/json",
-                    "Accept": "application/json"
+                    "Accept": "application/json",
+                    "Connection": "keep-alive"
                 },
-                timeout: CONFIG.timeout
+                signal: controller.signal
             });
 
+            clearTimeout(timeoutId);
+
             const responseText = await res.text();
+
+            // DEBUG: Ver respuesta cruda (primeros 500 caracteres)
+            if (process.env.DEBUG_MODE === 'true' && position === 0) {
+                logger.debug(`${this.deviceIp}: Respuesta (${res.status}): ${responseText.substring(0, 500)}...`);
+            }
 
             if (res.status === 401) {
                 logger.warn(`${this.deviceIp}: Error 401 - Reautenticando...`);
                 this.reauthenticate();
-
-                // Reintentar una vez después de reautenticar
-                const retryRes = await this.client.fetch(this.baseUrl, {
-                    method: "POST",
-                    body: JSON.stringify(body),
-                    headers: {
-                        "Content-Type": "application/json",
-                        "Accept": "application/json"
-                    },
-                    timeout: CONFIG.timeout
-                });
-
-                const retryText = await retryRes.text();
-
-                if (!retryRes.ok) {
-                    logger.error(`${this.deviceIp}: HTTP ${retryRes.status} después de reautenticar`);
-                    return {
-                        error: `HTTP ${retryRes.status} después de reautenticar`,
-                        deviceIp: this.deviceIp
-                    };
-                }
-
-                return {
-                    data: JSON.parse(retryText),
-                    deviceIp: this.deviceIp
-                };
+                
+                // Reintentar después de reautenticar
+                await delay(1000);
+                return await this.fetchEventsRaw(startTime, endTime, position);
             }
 
             if (!res.ok) {
@@ -156,13 +147,33 @@ class HikvisionHistoricalClient {
                 return { data: null, deviceIp: this.deviceIp };
             }
 
+            let parsedData;
+            try {
+                parsedData = JSON.parse(responseText);
+            } catch (parseError) {
+                logger.error(`${this.deviceIp}: Error parseando JSON: ${parseError.message}`);
+                return {
+                    error: `JSON parse error: ${parseError.message}`,
+                    deviceIp: this.deviceIp
+                };
+            }
+
             return {
-                data: JSON.parse(responseText),
-                deviceIp: this.deviceIp
+                data: parsedData,
+                deviceIp: this.deviceIp,
+                httpStatus: res.status
             };
 
         } catch (error) {
-            logger.error(`${this.deviceIp}: ${error.message}`);
+            logger.error(`${this.deviceIp}: ${error.name}: ${error.message}`);
+            
+            if (error.name === 'AbortError') {
+                return {
+                    error: `Timeout después de ${CONFIG.timeout}ms`,
+                    deviceIp: this.deviceIp
+                };
+            }
+            
             return {
                 error: error.message,
                 deviceIp: this.deviceIp
@@ -171,7 +182,8 @@ class HikvisionHistoricalClient {
     }
 }
 
-// Función mejorada con manejo de errores robusto
+// ==================== FUNCIÓN MEJORADA PARA OBTENER EVENTOS ====================
+
 async function getAllEventsForDateRange(deviceIp, startTime, endTime) {
     const client = new HikvisionHistoricalClient(deviceIp);
     const todosLosEventos = [];
@@ -182,7 +194,17 @@ async function getAllEventsForDateRange(deviceIp, startTime, endTime) {
     let consecutiveErrors = 0;
     const MAX_CONSECUTIVE_ERRORS = 3;
 
-    logger.info(`${deviceIp}: Consultando desde ${startTime} hasta ${endTime}`);
+    logger.info(`${deviceIp}: 🔍 Consultando desde ${startTime} hasta ${endTime}`);
+
+    // Estadísticas por tipo de evento
+    const stats = {
+        checkIn: 0,
+        checkOut: 0,
+        breakOut: 0,
+        breakIn: 0,
+        unknown: 0,
+        totalProcessed: 0
+    };
 
     while (batchNumber <= CONFIG.maxBatches && hasMoreEvents && consecutiveErrors < MAX_CONSECUTIVE_ERRORS) {
         try {
@@ -190,68 +212,137 @@ async function getAllEventsForDateRange(deviceIp, startTime, endTime) {
 
             if (resultado.error) {
                 consecutiveErrors++;
-                logger.error(`${deviceIp}: Error en lote ${batchNumber}: ${resultado.error} (${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS})`);
+                logger.error(`${deviceIp}: Error en lote ${batchNumber}: ${resultado.error}`);
                 
                 if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-                    logger.error(`${deviceIp}: Demasiados errores consecutivos, deteniendo...`);
+                    logger.error(`${deviceIp}: ❌ Demasiados errores consecutivos, deteniendo...`);
                     break;
                 }
                 
-                // Pequeña pausa después de un error
                 await delay(2000);
                 continue;
             }
 
-            // Resetear contador de errores después de éxito
-            consecutiveErrors = 0;
+            consecutiveErrors = 0; // Resetear contador de errores
 
-            if (!resultado.data?.AcsEvent?.InfoList || resultado.data.AcsEvent.InfoList.length === 0) {
-                logger.info(`${deviceIp}: No hay más eventos (lote ${batchNumber})`);
+            if (!resultado.data?.AcsEvent?.InfoList) {
+                logger.info(`${deviceIp}: No hay InfoList en la respuesta`);
                 hasMoreEvents = false;
                 break;
             }
 
             const eventosBatch = resultado.data.AcsEvent.InfoList;
+            
+            if (eventosBatch.length === 0) {
+                logger.info(`${deviceIp}: Lote ${batchNumber} vacío, terminando`);
+                hasMoreEvents = false;
+                break;
+            }
+
+            // Contar tipos de eventos en este lote
+            const batchStats = {
+                checkIn: 0,
+                checkOut: 0,
+                breakOut: 0,
+                breakIn: 0,
+                unknown: 0
+            };
+
+            eventosBatch.forEach(evento => {
+                const status = (evento.attendanceStatus || '').toLowerCase();
+                
+                if (status.includes('checkin') || status === 'checkin') {
+                    batchStats.checkIn++;
+                } else if (status.includes('checkout') || status === 'checkout') {
+                    batchStats.checkOut++;
+                } else if (status.includes('breakout') || status === 'breakout') {
+                    batchStats.breakOut++;
+                } else if (status.includes('breakin') || status === 'breakin') {
+                    batchStats.breakIn++;
+                } else {
+                    batchStats.unknown++;
+                    // DEBUG: Mostrar eventos con status desconocido
+                    if (process.env.DEBUG_MODE === 'true') {
+                        logger.debug(`${deviceIp}: Evento con status desconocido:`, {
+                            status: evento.attendanceStatus,
+                            major: evento.major,
+                            minor: evento.minor,
+                            employeeNo: evento.employeeNoString,
+                            name: evento.name
+                        });
+                    }
+                }
+            });
+
+            // Sumar estadísticas del lote
+            Object.keys(batchStats).forEach(key => {
+                stats[key] += batchStats[key];
+            });
+
             todosLosEventos.push(...eventosBatch);
+            stats.totalProcessed += eventosBatch.length;
 
             // Actualizar total reportado
             if (resultado.data.AcsEvent.totalMatches !== undefined) {
                 totalReported = resultado.data.AcsEvent.totalMatches;
             }
 
-            logger.info(`${deviceIp}: Lote ${batchNumber} - ${eventosBatch.length} eventos (Total: ${todosLosEventos.length}/${totalReported})`);
+            logger.info(`${deviceIp}: Lote ${batchNumber} - ${eventosBatch.length} eventos`);
+            logger.debug(`${deviceIp}: Estadísticas lote:`, batchStats);
 
-            // Lógica de finalización mejorada
+            // Verificar si hemos obtenido todos los eventos
             if (totalReported > 0 && todosLosEventos.length >= totalReported) {
-                logger.success(`${deviceIp}: ✅ Obtenidos todos los eventos (${todosLosEventos.length}/${totalReported})`);
+                logger.success(`${deviceIp}: ✅ Obtenidos todos los eventos reportados (${todosLosEventos.length}/${totalReported})`);
                 hasMoreEvents = false;
                 break;
             }
 
-            // Si el dispositivo devuelve menos de batchSize pero no sabemos el total
-            // continuamos con cautela
+            // Mover posición para siguiente lote
             position = todosLosEventos.length;
             batchNumber++;
 
-            // Pausa más larga después de varios lotes
-            const delayTime = batchNumber % 10 === 0 ? 1000 : CONFIG.batchDelay;
-            await delay(delayTime);
+            // Pausa estratégica
+            const pauseTime = batchNumber % 5 === 0 ? 1000 : CONFIG.batchDelay;
+            await delay(pauseTime);
 
         } catch (error) {
             consecutiveErrors++;
-            logger.error(`${deviceIp}: Error en lote ${batchNumber}: ${error.message}`);
-            await delay(2000); // Pausa más larga después de error
+            logger.error(`${deviceIp}: ❌ Error en lote ${batchNumber}: ${error.message}`);
+            await delay(2000);
         }
     }
 
-    // Estadísticas finales
-    if (todosLosEventos.length > 0) {
-        logger.success(`${deviceIp}: ✅ ${todosLosEventos.length} eventos obtenidos`);
-        if (totalReported > 0 && todosLosEventos.length < totalReported) {
-            logger.warn(`${deviceIp}: ⚠️ Solo se obtuvieron ${todosLosEventos.length} de ${totalReported} eventos`);
-        }
-    } else {
-        logger.error(`${deviceIp}: ❌ No se obtuvieron eventos`);
+    // Reporte final detallado
+    logger.info(`${deviceIp}: 📊 REPORTE FINAL:`);
+    logger.info(`${deviceIp}:   Total eventos obtenidos: ${todosLosEventos.length}`);
+    logger.info(`${deviceIp}:   Total reportado por API: ${totalReported}`);
+    logger.info(`${deviceIp}:   Lotes procesados: ${batchNumber - 1}`);
+    logger.info(`${deviceIp}:   Estadísticas por tipo:`);
+    logger.info(`${deviceIp}:     ✅ checkIn: ${stats.checkIn}`);
+    logger.info(`${deviceIp}:     🚪 checkOut: ${stats.checkOut}`);
+    logger.info(`${deviceIp}:     🍽️  breakOut: ${stats.breakOut}`);
+    logger.info(`${deviceIp}:     ↩️  breakIn: ${stats.breakIn}`);
+    logger.info(`${deviceIp}:     ❓ unknown: ${stats.unknown}`);
+
+    // DEBUG: Mostrar algunos eventos específicos del problema
+    if (deviceIp === '172.31.0.131' && process.env.DEBUG_MODE === 'true') {
+        logger.debug(`${deviceIp}: 🔍 EVENTOS ESPECÍFICOS DEL DISPOSITIVO PROBLEMÁTICO:`);
+        
+        const eventosProblematicos = todosLosEventos.filter(e => 
+            e.employeeNoString && ['1001414927', '1007306404', '1007306599', '1007306658', '1035223535', '1035870870', '1035877647', '1214740552'].includes(e.employeeNoString)
+        );
+        
+        eventosProblematicos.forEach((evento, idx) => {
+            logger.debug(`${deviceIp}: Evento ${idx + 1}:`, {
+                employeeNo: evento.employeeNoString,
+                name: evento.name,
+                time: evento.time,
+                attendanceStatus: evento.attendanceStatus,
+                major: evento.major,
+                minor: evento.minor,
+                cardNo: evento.cardNo
+            });
+        });
     }
 
     return {
@@ -259,54 +350,50 @@ async function getAllEventsForDateRange(deviceIp, startTime, endTime) {
         eventos: todosLosEventos,
         totalEventos: todosLosEventos.length,
         totalReported: totalReported,
-        batchesProcessed: batchNumber - 1
+        batchesProcessed: batchNumber - 1,
+        stats: stats
     };
 }
 
-// Función para obtener información de usuarios - SIN FILTRO DE ESTADO
-async function obtenerInfoUsuarios(documentos) {
-    if (!documentos || documentos.length === 0) {
-        return {};
+// ==================== FUNCIÓN MEJORADA PARA PROCESAR EVENTOS ====================
+
+// Función para interpretar el tipo de evento según major/minor codes
+function determinarTipoEvento(evento) {
+    const status = (evento.attendanceStatus || '').toLowerCase();
+    
+    // Primero intentar con attendanceStatus
+    if (status.includes('checkin') || status === 'checkin') {
+        return 'checkIn';
     }
-
-    try {
-        const placeholders = documentos.map((_, index) => `$${index + 1}`).join(',');
-
-        const query = `
-            SELECT 
-                employee_no as documento,
-                nombre,
-                departamento,
-                tipo_usuario,
-                estado,
-                genero
-            FROM usuarios_hikvision 
-            WHERE employee_no IN (${placeholders})
-        `;
-
-        const result = await pool.query(query, documentos);
-
-        logger.info(`✅ Obtenida información de ${result.rowCount} usuarios`);
-
-        const infoPorDocumento = {};
-        result.rows.forEach(row => {
-            infoPorDocumento[row.documento] = {
-                nombre: row.nombre,
-                departamento: row.departamento || 'General',
-                tipo_usuario: row.tipo_usuario,
-                estado: row.estado,
-                genero: row.genero
-            };
-        });
-
-        return infoPorDocumento;
-    } catch (error) {
-        logger.error(`Error obteniendo información de usuarios: ${error.message}`);
-        return {};
+    if (status.includes('checkout') || status === 'checkout') {
+        return 'checkOut';
     }
+    if (status.includes('breakout') || status === 'breakout') {
+        return 'breakOut';
+    }
+    if (status.includes('breakin') || status === 'breakin') {
+        return 'breakIn';
+    }
+    
+    // Si no hay attendanceStatus claro, usar major/minor codes
+    const major = evento.major || 0;
+    const minor = evento.minor || 0;
+    
+    // Códigos comunes de Hikvision (pueden variar según configuración)
+    if (major === 5) {
+        if (minor === 75) return 'checkIn';    // Entrada normal
+        if (minor === 76) return 'checkOut';   // Salida normal
+        if (minor === 77) return 'breakOut';   // Salida a almuerzo
+        if (minor === 78) return 'breakIn';    // Entrada de almuerzo
+    }
+    
+    // Por defecto, intentar deducir del cardReaderNo u otros campos
+    if (evento.cardReaderNo === '1') return 'checkIn';
+    if (evento.cardReaderNo === '2') return 'checkOut';
+    
+    return 'unknown';
 }
 
-// Función principal para procesar y guardar eventos
 async function procesarEventos(eventosPorDispositivo) {
     try {
         // 1. Combinar todos los eventos
@@ -316,13 +403,20 @@ async function procesarEventos(eventosPorDispositivo) {
                 eventos.forEach(evento => {
                     todosLosEventos.push({
                         ...evento,
-                        dispositivo: deviceIp
+                        dispositivo: deviceIp,
+                        // Asegurar que tenemos los campos necesarios
+                        employeeNoString: evento.employeeNoString || evento.cardNo || null,
+                        attendanceStatus: evento.attendanceStatus || null,
+                        name: evento.name || null,
+                        time: evento.time || null,
+                        pictureURL: evento.pictureURL || null
                     });
                 });
             }
         });
 
         if (todosLosEventos.length === 0) {
+            logger.warn('⚠️ No se encontraron eventos para procesar');
             return {
                 saved: 0,
                 errors: 0,
@@ -332,27 +426,54 @@ async function procesarEventos(eventosPorDispositivo) {
 
         logger.info(`📊 Procesando ${todosLosEventos.length} eventos...`);
 
-        // 2. Obtener información de usuarios únicos
+        // 2. Obtener información de usuarios únicos (SIN FILTRO DE ESTADO)
         const documentosUnicos = [...new Set(todosLosEventos
-            .map(evento => evento.employeeNoString || evento.cardNo)
+            .map(evento => evento.employeeNoString)
             .filter(Boolean))];
 
         logger.info(`👥 Consultando información de ${documentosUnicos.length} usuarios únicos...`);
-        const usuariosInfo = await obtenerInfoUsuarios(documentosUnicos);
+        
+        let usuariosInfo = {};
+        try {
+            if (documentosUnicos.length > 0) {
+                const placeholders = documentosUnicos.map((_, i) => `$${i + 1}`).join(',');
+                const query = `
+                    SELECT 
+                        employee_no as documento,
+                        nombre,
+                        departamento,
+                        tipo_usuario,
+                        estado,
+                        genero
+                    FROM usuarios_hikvision 
+                    WHERE employee_no IN (${placeholders})
+                `;
+                const result = await pool.query(query, documentosUnicos);
+                
+                result.rows.forEach(row => {
+                    usuariosInfo[row.documento] = {
+                        nombre: row.nombre,
+                        departamento: row.departamento || 'General',
+                        tipo_usuario: row.tipo_usuario,
+                        estado: row.estado,
+                        genero: row.genero
+                    };
+                });
+                logger.success(`✅ Obtenida información de ${Object.keys(usuariosInfo).length} usuarios`);
+            }
+        } catch (error) {
+            logger.error(`❌ Error obteniendo usuarios: ${error.message}`);
+        }
 
         // 3. Procesar y estructurar eventos por día
         const eventosPorDia = {};
 
         todosLosEventos.forEach(event => {
             try {
-                const documento = event.employeeNoString || event.cardNo || null;
-                const nombre = event.name || null;
+                const documento = event.employeeNoString;
                 const eventTime = event.time;
-                const attendanceStatus = event.attendanceStatus || null;
-                const dispositivo = event.dispositivo;
-                const pictureURL = event.pictureURL || null;
-
-                if (!documento || !eventTime || !attendanceStatus) {
+                
+                if (!documento || !eventTime) {
                     return;
                 }
 
@@ -360,11 +481,17 @@ async function procesarEventos(eventosPorDispositivo) {
                 const hora = eventTime.split('T')[1]?.split('-')[0]?.substring(0, 8);
 
                 if (!fecha || !hora) {
+                    logger.debug(`Evento con fecha/hora inválida: ${documento} - ${eventTime}`);
                     return;
                 }
 
-                // Obtener información del usuario (puede no existir en la BD)
-                const infoUsuario = usuariosInfo[documento] || {};
+                // Determinar tipo de evento (usar función mejorada)
+                const tipoEvento = determinarTipoEvento(event);
+                
+                if (tipoEvento === 'unknown') {
+                    logger.debug(`Evento con tipo desconocido: ${documento} - ${event.attendanceStatus} - major:${event.major}, minor:${event.minor}`);
+                    return;
+                }
 
                 if (!eventosPorDia[fecha]) {
                     eventosPorDia[fecha] = {};
@@ -373,13 +500,14 @@ async function procesarEventos(eventosPorDispositivo) {
                 const key = `${documento}_${fecha}`;
 
                 if (!eventosPorDia[fecha][key]) {
+                    const infoUsuario = usuariosInfo[documento] || {};
                     eventosPorDia[fecha][key] = {
                         documento: documento,
-                        nombre: nombre || infoUsuario.nombre || 'Sin nombre',
+                        nombre: event.name || infoUsuario.nombre || 'Sin nombre',
                         fecha: fecha,
                         departamento: infoUsuario.departamento || 'General',
                         imagen: null,
-                        dispositivo_ip: dispositivo,
+                        dispositivo_ip: event.dispositivo,
                         checkIns: [],
                         checkOuts: [],
                         breakOuts: [],
@@ -388,7 +516,7 @@ async function procesarEventos(eventosPorDispositivo) {
                 }
 
                 // Agregar evento según el tipo
-                switch (attendanceStatus) {
+                switch (tipoEvento) {
                     case 'checkIn':
                         eventosPorDia[fecha][key].checkIns.push(hora);
                         break;
@@ -404,12 +532,12 @@ async function procesarEventos(eventosPorDispositivo) {
                 }
 
                 // Guardar la imagen del primer evento con imagen
-                if (pictureURL && !eventosPorDia[fecha][key].imagen) {
-                    eventosPorDia[fecha][key].imagen = pictureURL;
+                if (event.pictureURL && !eventosPorDia[fecha][key].imagen) {
+                    eventosPorDia[fecha][key].imagen = event.pictureURL;
                 }
 
             } catch (error) {
-                logger.debug(`Error procesando evento: ${error.message}`);
+                logger.debug(`Error procesando evento individual: ${error.message}`);
             }
         });
 
@@ -419,6 +547,23 @@ async function procesarEventos(eventosPorDispositivo) {
         const diasProcesados = Object.keys(eventosPorDia).length;
 
         logger.info(`📅 Procesando ${diasProcesados} días de eventos...`);
+
+        // DEBUG: Mostrar información específica de los usuarios problemáticos
+        if (process.env.DEBUG_MODE === 'true') {
+            const usuariosProblema = ['1001414927', '1007306404', '1007306599'];
+            usuariosProblema.forEach(doc => {
+                if (eventosPorDia['2026-01-02'] && eventosPorDia['2026-01-02'][`${doc}_2026-01-02`]) {
+                    const evento = eventosPorDia['2026-01-02'][`${doc}_2026-01-02`];
+                    logger.debug(`🔍 DEBUG ${doc} - 2026-01-02:`, {
+                        nombre: evento.nombre,
+                        checkIns: evento.checkIns,
+                        checkOuts: evento.checkOuts,
+                        breakOuts: evento.breakOuts,
+                        breakIns: evento.breakIns
+                    });
+                }
+            });
+        }
 
         for (const [fechaStr, eventosDelDia] of Object.entries(eventosPorDia)) {
             let savedPorDia = 0;
@@ -432,30 +577,28 @@ async function procesarEventos(eventosPorDispositivo) {
                     evento.breakOuts.sort();
                     evento.breakIns.sort();
 
-                    // Determinar valores finales
+                    // Determinar valores finales (más flexible)
                     const valores = {
-                        hora_entrada: evento.checkIns[0] || null,
-                        hora_salida: evento.checkOuts[evento.checkOuts.length - 1] || null,
-                        hora_salida_almuerzo: evento.breakOuts[0] || null,
-                        hora_entrada_almuerzo: evento.breakIns[evento.breakIns.length - 1] || null
+                        hora_entrada: evento.checkIns.length > 0 ? evento.checkIns[0] : null,
+                        hora_salida: evento.checkOuts.length > 0 ? evento.checkOuts[evento.checkOuts.length - 1] : null,
+                        hora_salida_almuerzo: evento.breakOuts.length > 0 ? evento.breakOuts[0] : null,
+                        hora_entrada_almuerzo: evento.breakIns.length > 0 ? evento.breakIns[evento.breakIns.length - 1] : null
                     };
 
-                    // DEBUG: Mostrar lo que se va a guardar
-                    if (evento.documento === '1001414927' && fechaStr === '2026-01-02') {
-                        logger.info(`🔍 DEBUG 1001414927 - ${fechaStr}:`, {
-                            checkIns: evento.checkIns,
-                            checkOuts: evento.checkOuts,
-                            valores: valores,
+                    // DEBUG: Log específico para usuarios problemáticos
+                    if (['1001414927', '1007306404', '1007306599'].includes(evento.documento) && fechaStr === '2026-01-02') {
+                        logger.info(`🔍 PROCESANDO ${evento.documento} - ${fechaStr}:`, {
                             nombre: evento.nombre,
-                            departamento: evento.departamento
+                            valores: valores,
+                            checkIns: evento.checkIns,
+                            checkOuts: evento.checkOuts
                         });
                     }
 
-                    // Solo guardar si hay AL MENOS UN dato
-                    const tieneDatos = valores.hora_entrada || valores.hora_salida ||
-                        valores.hora_salida_almuerzo || valores.hora_entrada_almuerzo;
-
-                    if (!tieneDatos) {
+                    // Guardar incluso si solo tiene un dato (ej: solo hora de salida)
+                    const tieneAlMenosUnDato = Object.values(valores).some(v => v !== null);
+                    
+                    if (!tieneAlMenosUnDato) {
                         continue;
                     }
 
@@ -502,22 +645,45 @@ async function procesarEventos(eventosPorDispositivo) {
                     savedPorDia++;
                     totalSaved++;
 
-                    // Log específico para el usuario 1001414927
-                    if (evento.documento === '1001414927' && fechaStr === '2026-01-02') {
-                        logger.success(`✅ Guardado 1001414927 - ${fechaStr}: entrada=${valores.hora_entrada}, salida=${valores.hora_salida}`);
+                    // Log exitoso para usuarios problemáticos
+                    if (['1001414927', '1007306404', '1007306599'].includes(evento.documento) && fechaStr === '2026-01-02') {
+                        logger.success(`✅ GUARDADO ${evento.documento} (${evento.nombre}) - ${fechaStr}:`, {
+                            entrada: valores.hora_entrada || 'NO',
+                            salida: valores.hora_salida || 'NO',
+                            salida_almuerzo: valores.hora_salida_almuerzo || 'NO',
+                            entrada_almuerzo: valores.hora_entrada_almuerzo || 'NO'
+                        });
                     }
 
                 } catch (error) {
                     errorsPorDia++;
                     totalErrors++;
-                    logger.error(`❌ Error guardando ${evento.documento}-${fechaStr}: ${error.message}`);
+                    
+                    // Log detallado del error
+                    if (['1001414927', '1007306404', '1007306599'].includes(evento.documento) && fechaStr === '2026-01-02') {
+                        logger.error(`❌ ERROR guardando ${evento.documento} - ${fechaStr}: ${error.message}`);
+                        logger.error(`Query params:`, [
+                            evento.documento,
+                            evento.nombre?.substring(0, 20),
+                            fechaStr,
+                            valores.hora_entrada,
+                            valores.hora_salida,
+                            valores.hora_salida_almuerzo,
+                            valores.hora_entrada_almuerzo,
+                            evento.dispositivo_ip,
+                            evento.departamento,
+                            evento.imagen?.substring(0, 50)
+                        ]);
+                    }
                 }
             }
 
-            logger.info(`📅 Día ${fechaStr}: ${savedPorDia} registros guardados, ${errorsPorDia} errores`);
+            if (savedPorDia > 0 || errorsPorDia > 0) {
+                logger.info(`📅 ${fechaStr}: ${savedPorDia} ✅, ${errorsPorDia} ❌`);
+            }
         }
 
-        logger.success(`✅ Proceso completado: ${totalSaved} registros guardados, ${totalErrors} errores`);
+        logger.success(`🎉 PROCESO COMPLETADO: ${totalSaved} registros guardados, ${totalErrors} errores`);
 
         return {
             saved: totalSaved,
@@ -528,27 +694,28 @@ async function procesarEventos(eventosPorDispositivo) {
         };
 
     } catch (error) {
-        logger.error(`Error en procesarEventos: ${error.message}`);
+        logger.error(`❌ ERROR CRÍTICO en procesarEventos: ${error.message}`);
         logger.error(`Stack: ${error.stack}`);
         return {
             saved: 0,
             errors: 1,
-            message: `Error: ${error.message}`
+            message: `Error crítico: ${error.message}`
         };
     }
 }
 
-// Función principal - Buscar TODOS los eventos (EXACTO como en Postman)
+// ==================== FUNCIÓN PRINCIPAL MEJORADA ====================
+
 async function sincronizarTodosEventos() {
     const startTime = Date.now();
 
     try {
-        logger.info(`🚀 INICIANDO SINCRONIZACIÓN DE TODOS LOS EVENTOS`);
-        logger.info(`📱 Dispositivos: ${CONFIG.devices.length}`);
+        logger.info(`🚀 INICIANDO SINCRONIZACIÓN COMPLETA`);
+        logger.info(`📱 Dispositivos configurados: ${CONFIG.devices.join(', ')}`);
 
         // Rango EXACTO como en el ejemplo de Postman
         const ahora = new Date();
-        const inicioDate = new Date('2025-01-01T00:00:00'); // Fijo: 1 de enero de 2025
+        const inicioDate = new Date('2026-01-02T00:00:00'); // ESPECÍFICO para el problema (2 de enero 2026)
 
         // Asegurar horas exactas
         inicioDate.setHours(0, 0, 0, 0);
@@ -557,10 +724,9 @@ async function sincronizarTodosEventos() {
         const inicioBusqueda = formatHikvisionDate(inicioDate);
         const finBusqueda = formatHikvisionDate(ahora);
 
-        logger.info(`🔍 Rango EXACTO como Postman:`);
-        logger.info(`   Inicio: ${inicioBusqueda} (1 de enero 2025)`);
-        logger.info(`   Fin: ${finBusqueda} (hoy)`);
-        logger.info(`   Duración: ${Math.ceil((ahora - inicioDate) / (1000 * 60 * 60 * 24))} días`);
+        logger.info(`🔍 Rango de búsqueda ESPECÍFICO:`);
+        logger.info(`   Inicio: ${inicioBusqueda} (2 de enero 2026)`);
+        logger.info(`   Fin: ${finBusqueda} (ahora)`);
 
         // Consultar todos los dispositivos
         logger.info(`📡 Consultando ${CONFIG.devices.length} dispositivos...`);
@@ -587,10 +753,16 @@ async function sincronizarTodosEventos() {
 
                 estadisticasDispositivos[deviceIp] = {
                     eventos: data.totalEventos,
-                    batches: data.batchesProcessed
+                    batches: data.batchesProcessed,
+                    stats: data.stats
                 };
 
                 logger.success(`${deviceIp}: ${data.totalEventos} eventos obtenidos`);
+                
+                // Mostrar estadísticas detalladas
+                if (data.stats) {
+                    logger.info(`${deviceIp}: Estadísticas: checkIn=${data.stats.checkIn}, checkOut=${data.stats.checkOut}`);
+                }
             } else {
                 eventosPorDispositivo[deviceIp] = [];
                 estadisticasDispositivos[deviceIp] = {
@@ -598,7 +770,7 @@ async function sincronizarTodosEventos() {
                     batches: 0,
                     error: resultado.reason?.message
                 };
-                logger.error(`${deviceIp}: Error: ${resultado.reason?.message}`);
+                logger.error(`${deviceIp}: ❌ Error: ${resultado.reason?.message}`);
             }
         }
 
@@ -621,7 +793,7 @@ async function sincronizarTodosEventos() {
         const elapsed = Date.now() - startTime;
         const elapsedSeconds = (elapsed / 1000).toFixed(2);
 
-        logger.success(`✅ Sincronización completada en ${elapsedSeconds} segundos`);
+        logger.success(`✅ SINCRONIZACIÓN COMPLETADA en ${elapsedSeconds} segundos`);
 
         return {
             success: true,
@@ -629,7 +801,7 @@ async function sincronizarTodosEventos() {
             rango: {
                 inicio: inicioBusqueda,
                 fin: finBusqueda,
-                descripcion: 'Desde 1 de enero 2025 hasta hoy'
+                descripcion: 'Desde 2 de enero 2026 hasta ahora'
             },
             estadisticas: {
                 dispositivos: CONFIG.devices.length,
@@ -645,7 +817,7 @@ async function sincronizarTodosEventos() {
 
     } catch (error) {
         const elapsed = Date.now() - startTime;
-        logger.error(`❌ Error en sincronización: ${error.message}`);
+        logger.error(`❌ ERROR CRÍTICO en sincronización: ${error.message}`);
         logger.error(`Stack: ${error.stack}`);
 
         return {
@@ -660,21 +832,29 @@ async function sincronizarTodosEventos() {
     }
 }
 
-// Endpoint único - Siempre sincroniza todos los eventos
+// ==================== ENDPOINTS ====================
+
 export async function POST(request) {
     try {
         logger.info(`📥 Solicitud de sincronización completa recibida`);
+        
+        // Habilitar debug mode si se solicita
+        const body = await request.json().catch(() => ({}));
+        if (body.debug === true) {
+            process.env.DEBUG_MODE = 'true';
+            logger.info('🔧 DEBUG MODE ACTIVADO');
+        }
 
         const resultado = await sincronizarTodosEventos();
 
         return NextResponse.json({
             ...resultado,
             endpoint: '/api/eventos/actualizar-eventos',
-            descripcion: 'Sincroniza eventos desde 1 de enero 2025 hasta hoy'
+            descripcion: 'Sincronización completa de eventos Hikvision'
         });
 
     } catch (error) {
-        logger.error(`Error en endpoint: ${error.message}`);
+        logger.error(`Error en endpoint POST: ${error.message}`);
         return NextResponse.json({
             success: false,
             error: error.message,
@@ -683,10 +863,16 @@ export async function POST(request) {
     }
 }
 
-// También acepta GET para compatibilidad
 export async function GET(request) {
     try {
         logger.info(`📥 Solicitud GET de sincronización recibida`);
+        
+        // Verificar parámetro de debug
+        const url = new URL(request.url);
+        if (url.searchParams.get('debug') === 'true') {
+            process.env.DEBUG_MODE = 'true';
+            logger.info('🔧 DEBUG MODE ACTIVADO vía GET');
+        }
 
         const resultado = await sincronizarTodosEventos();
 
