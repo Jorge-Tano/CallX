@@ -240,7 +240,8 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
         employeeNo: user.numeroEmpleado,
         departamento: user.departamento,
         estado: "Activo",
-        fechaCreacion: new Date().toISOString()
+        fechaCreacion: new Date().toISOString(),
+        deviceIp: "" // o puedes usar un valor por defecto como "Pendiente"
       }));
 
       await onCreate(nuevosUsuarios);
