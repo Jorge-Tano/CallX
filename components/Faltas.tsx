@@ -6,6 +6,8 @@ import { useState, useEffect, useMemo } from 'react';
 interface Falta {
   documento: string;
   nombre: string;
+  fecha: string;
+  campana: string;
   estado: string;
   gravedad: string;
   horas: {
@@ -26,6 +28,7 @@ interface Falta {
 
 interface Estadisticas {
   totalRegistros: number;
+  totalIncompletos: number;
   porEstado: Record<string, number>;
   porGravedad: {
     NINGUNA: number;
@@ -37,6 +40,7 @@ interface Estadisticas {
     completos: number;
     incompletos: number;
     noRegistrados: number;
+    noAplica: number;
     cortos: number;
     largos: number;
     normales: number;
@@ -52,34 +56,29 @@ export default function Faltas({
   fechaInicial,
   mostrarSoloHoy = false 
 }: FaltasProps) {
-  // Función para obtener la fecha de ayer
   const getFechaAyer = () => {
     const ayer = new Date();
     ayer.setDate(ayer.getDate() - 1);
     return ayer.toISOString().split('T')[0];
   };
 
-  // Función para obtener la fecha de hoy
-  const getFechaHoy = () => {
-    return new Date().toISOString().split('T')[0];
-  };
+  const getFechaHoy = () => new Date().toISOString().split('T')[0];
 
-  // Si mostrarSoloHoy es true, usar ayer. De lo contrario, usar fechaInicial o ayer por defecto
-  const fechaInicialCalculada = mostrarSoloHoy ? getFechaAyer() : (fechaInicial || getFechaAyer());
-  
-  const [fecha, setFecha] = useState(fechaInicialCalculada);
+  const fechaDefault = mostrarSoloHoy ? getFechaAyer() : (fechaInicial || getFechaAyer());
+
+  const [fechaInicio, setFechaInicio] = useState(fechaDefault);
+  const [fechaFin, setFechaFin] = useState(fechaDefault);
   const [todosRegistros, setTodosRegistros] = useState<Falta[]>([]);
   const [estadisticas, setEstadisticas] = useState<Estadisticas | null>(null);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [esRango, setEsRango] = useState(false);
   
   // Filtros
   const [filtroEstado, setFiltroEstado] = useState<string>('');
   const [filtroGravedad, setFiltroGravedad] = useState<string>('');
-  const [incluirCompletos, setIncluirCompletos] = useState(false);
   const [busqueda, setBusqueda] = useState<string>('');
 
-  // Colores para gravedad
   const coloresGravedad = {
     ALTA: 'bg-gradient-to-r from-red-600 to-red-500 border-red-500/50 text-white',
     MEDIA: 'bg-gradient-to-r from-yellow-600 to-yellow-500 border-yellow-500/50 text-white',
@@ -87,18 +86,17 @@ export default function Faltas({
     NINGUNA: 'bg-gradient-to-r from-green-600 to-green-500 border-green-500/50 text-white'
   };
 
-  // Colores para estados de almuerzo
   const coloresAlmuerzo = {
     NORMAL: 'bg-gradient-to-r from-green-600 to-green-500 border-green-500/50 text-white',
     CURTO: 'bg-gradient-to-r from-yellow-600 to-yellow-500 border-yellow-500/50 text-white',
     LARGO: 'bg-gradient-to-r from-orange-600 to-orange-500 border-orange-500/50 text-white',
     INCOMPLETO: 'bg-gradient-to-r from-red-600 to-red-500 border-red-500/50 text-white',
     NO_REGISTRADO: 'bg-gradient-to-r from-slate-600 to-slate-500 border-slate-500/50 text-white',
+    NO_APLICA: 'bg-gradient-to-r from-slate-500 to-slate-400 border-slate-400/50 text-white',
     ERROR: 'bg-gradient-to-r from-purple-600 to-purple-500 border-purple-500/50 text-white',
     DESCONOCIDO: 'bg-gradient-to-r from-gray-600 to-gray-500 border-gray-500/50 text-white'
   };
 
-  // Colores para estados de asistencia
   const getEstadoColor = (estado: string) => {
     const colores: Record<string, string> = {
       'ENTRADA_SIN_SALIDA': 'bg-gradient-to-r from-red-700 to-red-600 border-red-600/50',
@@ -106,7 +104,6 @@ export default function Faltas({
       'SIN_ALMUERZO': 'bg-gradient-to-r from-yellow-700 to-yellow-600 border-yellow-600/50',
       'SOLO_ALMUERZO': 'bg-gradient-to-r from-pink-700 to-pink-600 border-pink-600/50',
       'SIN_MARCAS': 'bg-gradient-to-r from-slate-700 to-slate-600 border-slate-600/50',
-      'COMPLETO': 'bg-gradient-to-r from-green-700 to-green-600 border-green-600/50',
       'FALTA_ENTRADA_ALMUERZO': 'bg-gradient-to-r from-yellow-700 to-yellow-600 border-yellow-600/50',
       'FALTA_SALIDA_ALMUERZO': 'bg-gradient-to-r from-yellow-700 to-yellow-600 border-yellow-600/50',
       'OTRO': 'bg-gradient-to-r from-gray-700 to-gray-600 border-gray-600/50'
@@ -114,7 +111,6 @@ export default function Faltas({
     return colores[estado] || 'bg-gradient-to-r from-slate-700 to-slate-600 border-slate-600/50';
   };
 
-  // Nombres amigables para los estados
   const getEstadoNombre = (estado: string) => {
     const nombres: Record<string, string> = {
       'ENTRADA_SIN_SALIDA': 'Entrada sin salida',
@@ -122,7 +118,6 @@ export default function Faltas({
       'SIN_ALMUERZO': 'Sin almuerzo',
       'SOLO_ALMUERZO': 'Solo almuerzo',
       'SIN_MARCAS': 'Sin registros',
-      'COMPLETO': 'Jornada completa',
       'FALTA_ENTRADA_ALMUERZO': 'Falta entrada almuerzo',
       'FALTA_SALIDA_ALMUERZO': 'Falta salida almuerzo',
       'OTRO': 'Otro'
@@ -130,30 +125,35 @@ export default function Faltas({
     return nombres[estado] || estado;
   };
 
-  // Función para formatear fecha
   const formatearFecha = (fechaStr: string) => {
     const fechaObj = new Date(fechaStr + 'T00:00:00');
     const opciones: Intl.DateTimeFormatOptions = { 
-      weekday: 'long', 
-      year: 'numeric', 
-      month: 'long', 
-      day: 'numeric' 
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' 
     };
     return fechaObj.toLocaleDateString('es-ES', opciones);
   };
 
-  // Función para cargar faltas
+  const formatearRango = () => {
+    if (fechaInicio === fechaFin) return formatearFecha(fechaInicio);
+    return `${formatearFecha(fechaInicio)} — ${formatearFecha(fechaFin)}`;
+  };
+
   const cargarFaltas = async () => {
+    if (!fechaInicio || !fechaFin) return;
+    if (fechaFin < fechaInicio) {
+      setError('La fecha fin no puede ser anterior a la fecha inicio');
+      return;
+    }
+
     setCargando(true);
     setError(null);
     
     try {
       const params = new URLSearchParams({
-        fecha
+        fechaInicio,
+        fechaFin
       });
 
-      console.log('Fetching:', `/api/eventos/faltas?${params}`);
-      
       const response = await fetch(`/api/eventos/faltas?${params}`);
       
       const contentType = response.headers.get('content-type');
@@ -162,125 +162,63 @@ export default function Faltas({
       }
       
       const data = await response.json();
-      console.log('API Response:', data);
 
       if (data.success) {
         setTodosRegistros(data.registros || []);
         setEstadisticas(data.estadisticas);
-        
-        // Resetear filtros al cambiar de fecha
+        setEsRango(data.esRango || false);
         setFiltroEstado('');
         setFiltroGravedad('');
         setBusqueda('');
-        setIncluirCompletos(false);
-        
-        console.log(`Cargados ${data.registros.length} registros`);
-        console.log('Estados disponibles:', Object.keys(data.estadisticas?.porEstado || {}));
       } else {
         setError(data.error || 'Error al cargar faltas');
       }
     } catch (err: any) {
       setError(err.message || 'Error de conexión');
-      console.error('Error cargando faltas:', err);
     } finally {
       setCargando(false);
     }
   };
 
-  // Cargar faltas al cambiar fecha
   useEffect(() => {
-    if (fecha) {
+    if (fechaInicio && fechaFin) {
       cargarFaltas();
     }
-  }, [fecha]);
+  }, []);
 
-  // APLICAR FILTROS EN EL FRONTEND
+  // Aplicar filtros en frontend
   const registrosFiltrados = useMemo(() => {
-    console.log('Aplicando filtros...');
-    console.log('Total registros:', todosRegistros.length);
-    console.log('Filtro estado:', filtroEstado);
-    console.log('Filtro gravedad:', filtroGravedad);
-    console.log('Incluir completos:', incluirCompletos);
-    console.log('Búsqueda:', busqueda);
-    
-    const filtrados = todosRegistros.filter(registro => {
-      // Filtro por estado
-      if (filtroEstado && registro.estado !== filtroEstado) {
-        return false;
-      }
-      
-      // Filtro por gravedad
-      if (filtroGravedad && registro.gravedad !== filtroGravedad) {
-        return false;
-      }
-      
-      // Filtro de jornadas completas - ESTA ES LA CLAVE
-      if (!incluirCompletos && registro.estado === 'COMPLETO') {
-        return false;
-      }
-      
-      // Búsqueda por nombre o documento
+    return todosRegistros.filter(registro => {
+      if (filtroEstado && registro.estado !== filtroEstado) return false;
+      if (filtroGravedad && registro.gravedad !== filtroGravedad) return false;
       if (busqueda) {
         const termino = busqueda.toLowerCase();
         const nombre = registro.nombre?.toLowerCase() || '';
         const documento = registro.documento?.toLowerCase() || '';
-        if (!nombre.includes(termino) && !documento.includes(termino)) {
-          return false;
-        }
+        if (!nombre.includes(termino) && !documento.includes(termino)) return false;
       }
-      
       return true;
     });
-    
-    console.log('Registros filtrados:', filtrados.length);
-    return filtrados;
-  }, [todosRegistros, filtroEstado, filtroGravedad, incluirCompletos, busqueda]);
+  }, [todosRegistros, filtroEstado, filtroGravedad, busqueda]);
 
-  // Estadísticas filtradas
   const estadisticasFiltradas = useMemo(() => {
     const stats = {
       totalRegistros: registrosFiltrados.length,
       porEstado: {} as Record<string, number>,
-      porGravedad: {
-        NINGUNA: 0,
-        ALTA: 0,
-        MEDIA: 0,
-        BAJA: 0
-      },
-      almuerzos: {
-        completos: 0,
-        incompletos: 0,
-        noRegistrados: 0,
-        cortos: 0,
-        largos: 0,
-        normales: 0
-      }
+      porGravedad: { NINGUNA: 0, ALTA: 0, MEDIA: 0, BAJA: 0 },
+      almuerzos: { completos: 0, incompletos: 0, noRegistrados: 0, noAplica: 0, cortos: 0, largos: 0, normales: 0 }
     };
 
     registrosFiltrados.forEach(registro => {
-      // Por estado
       stats.porEstado[registro.estado] = (stats.porEstado[registro.estado] || 0) + 1;
-      
-      
-      // Almuerzos
       switch (registro.almuerzo?.estado) {
-        case 'NORMAL':
-          stats.almuerzos.normales++;
-          break;
-        case 'CURTO':
-          stats.almuerzos.cortos++;
-          break;
-        case 'LARGO':
-          stats.almuerzos.largos++;
-          break;
-        case 'INCOMPLETO':
-          stats.almuerzos.incompletos++;
-          break;
-        case 'NO_REGISTRADO':
-          stats.almuerzos.noRegistrados++;
-          break;
+        case 'NORMAL': stats.almuerzos.normales++; break;
+        case 'CURTO': stats.almuerzos.cortos++; break;
+        case 'LARGO': stats.almuerzos.largos++; break;
+        case 'INCOMPLETO': stats.almuerzos.incompletos++; break;
+        case 'NO_REGISTRADO': stats.almuerzos.noRegistrados++; break;
+        case 'NO_APLICA': stats.almuerzos.noAplica++; break;
       }
-      
       if (registro.horas.salidaAlmuerzo !== '--:--' && registro.horas.entradaAlmuerzo !== '--:--') {
         stats.almuerzos.completos++;
       }
@@ -289,62 +227,43 @@ export default function Faltas({
     return stats;
   }, [registrosFiltrados]);
 
-  // Estados disponibles (basados en TODOS los registros)
   const estadosDisponibles = useMemo(() => {
     if (!estadisticas?.porEstado) return [];
-    
     return Object.entries(estadisticas.porEstado)
       .map(([estado, cantidad]) => ({
         id: estado,
         nombre: getEstadoNombre(estado),
         count: cantidad,
-        gravedad: estado === 'COMPLETO' ? 'NINGUNA' : 
-                  ['ENTRADA_SIN_SALIDA', 'SALIDA_SIN_ENTRADA', 'SIN_MARCAS'].includes(estado) ? 'ALTA' : 
-                  ['SIN_ALMUERZO', 'SOLO_ALMUERZO', 'FALTA_ENTRADA_ALMUERZO', 'FALTA_SALIDA_ALMUERZO'].includes(estado) ? 'MEDIA' : 'BAJA',
-        porcentaje: Math.round((cantidad / (estadisticas?.totalRegistros || 1)) * 100)
+        porcentaje: Math.round((cantidad / (estadisticas?.totalIncompletos || 1)) * 100)
       }))
       .sort((a, b) => b.count - a.count);
   }, [estadisticas]);
 
-  // Formatear fecha para mostrar
-  const fechaFormateada = fecha ? formatearFecha(fecha) : '';
-
- // Verificar si hay jornadas completas
-const hayJornadasCompletas = useMemo(() => {
-  if (!estadisticas?.porEstado) return false;
-  return (estadisticas.porEstado['COMPLETO'] || 0) > 0;
-}, [estadisticas]);
-
-  // Generar recomendaciones basadas en datos filtrados
   const recomendaciones = useMemo(() => {
     const recs = [];
+    if (!estadisticasFiltradas.porGravedad) return recs;
     
     if (estadisticasFiltradas.porGravedad.ALTA > 0) {
       recs.push({
         tipo: 'URGENTE',
-        mensaje: `${estadisticasFiltradas.porGravedad.ALTA} empleados tienen faltas graves (entrada/salida incompleta)`,
+        mensaje: `${estadisticasFiltradas.porGravedad.ALTA} empleados con faltas graves (entrada/salida incompleta)`,
         accion: 'Notificar inmediatamente a RRHH'
       });
     }
-    
-    
-    
     if (estadisticasFiltradas.almuerzos.cortos > 0) {
       recs.push({
         tipo: 'REVISIÓN',
-        mensaje: `${estadisticasFiltradas.almuerzos.cortos} empleados tuvieron almuerzos muy cortos (<30 min)`,
+        mensaje: `${estadisticasFiltradas.almuerzos.cortos} empleados con almuerzos muy cortos (<30 min)`,
         accion: 'Verificar cumplimiento de tiempo de almuerzo'
       });
     }
-    
     if (estadisticasFiltradas.almuerzos.largos > 0) {
       recs.push({
         tipo: 'REVISIÓN',
-        mensaje: `${estadisticasFiltradas.almuerzos.largos} empleados tuvieron almuerzos muy largos (>2h)`,
+        mensaje: `${estadisticasFiltradas.almuerzos.largos} empleados con almuerzos muy largos (>2h)`,
         accion: 'Revisar tiempos de almuerzo extendidos'
       });
     }
-    
     if (estadisticasFiltradas.porEstado.SIN_MARCAS > 0) {
       recs.push({
         tipo: 'ATENCIÓN',
@@ -352,37 +271,25 @@ const hayJornadasCompletas = useMemo(() => {
         accion: 'Verificar inasistencias'
       });
     }
-    
-    // Mensaje especial cuando hay completos pero no se están mostrando
-    if (hayJornadasCompletas && !incluirCompletos) {
-      recs.push({
-        tipo: 'INFORMACIÓN',
-        mensaje: `Hay ${estadisticas?.porEstado?.['COMPLETO'] || 0} jornadas completas ocultas`,
-        accion: 'Activa "Incluir jornadas completas" para verlas'
-      });
-    }
-    
     return recs;
-  }, [estadisticasFiltradas, hayJornadasCompletas, incluirCompletos, estadisticas]);
+  }, [estadisticasFiltradas]);
 
   return (
     <div className="p-4">
       {/* Header */}
       <div className="mb-4 p-6 pt-4 pb-3 bg-gradient-to-r from-slate-600 via-emerald-600 to-slate-700 rounded-lg shadow-lg border border-slate-500/30">
         
-        {/* PRIMERA FILA: Título y botón */}
+        {/* Título y botón */}
         <div className="mb-3">
           <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <h1 className="text-2xl font-bold text-white">Reporte de Faltas y Almuerzos</h1>
-              {fecha && (
+              {fechaInicio && (
                 <span className="text-sm font-medium text-emerald-200 bg-emerald-900/40 px-3 py-1 rounded-full border border-emerald-500/30">
-                  {fechaFormateada}
+                  {formatearRango()}
                 </span>
               )}
             </div>
-
-            {/* Botón de actualizar */}
             <button
               onClick={cargarFaltas}
               disabled={cargando}
@@ -405,40 +312,66 @@ const hayJornadasCompletas = useMemo(() => {
           </div>
         </div>
 
-        {/* SEGUNDA FILA: Fecha y Búsqueda */}
+        {/* Controles */}
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 mb-4">
           
-          {/* Columna 1: Selector de fecha y búsqueda */}
+          {/* Fechas y búsqueda */}
           <div className="bg-slate-800/50 rounded-lg border border-slate-500/30 p-4 lg:col-span-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Selector de fecha */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              
+              {/* Fecha inicio */}
               <div>
                 <div className="flex items-center gap-2 mb-2">
                   <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                   </svg>
-                  <label className="text-sm font-medium text-slate-300">Fecha del Reporte</label>
+                  <label className="text-sm font-medium text-slate-300">Fecha inicio</label>
                 </div>
                 <input
                   type="date"
-                  value={fecha}
+                  value={fechaInicio}
                   onChange={(e) => {
-                    const nuevaFecha = e.target.value;
-                    const fechaHoy = getFechaHoy();
-                    
-                    if (nuevaFecha === fechaHoy) {
-                      alert('No se puede seleccionar la fecha de hoy. Seleccione una fecha anterior.');
+                    const val = e.target.value;
+                    if (val >= getFechaHoy()) {
+                      alert('No se puede seleccionar la fecha de hoy o posterior.');
                       return;
                     }
-                    
-                    setFecha(nuevaFecha);
+                    setFechaInicio(val);
+                    // Si fechaFin es anterior al nuevo inicio, igualarla
+                    if (fechaFin < val) setFechaFin(val);
                   }}
-                  className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-lg text-base focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-white shadow-sm"
                   max={getFechaAyer()}
+                  className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-lg text-base focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-white shadow-sm"
                 />
-                <p className="text-xs text-slate-400 mt-1">
-                  Solo fechas anteriores. Hoy no está disponible.
-                </p>
+              </div>
+
+              {/* Fecha fin */}
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <label className="text-sm font-medium text-slate-300">Fecha fin</label>
+                </div>
+                <input
+                  type="date"
+                  value={fechaFin}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val >= getFechaHoy()) {
+                      alert('No se puede seleccionar la fecha de hoy o posterior.');
+                      return;
+                    }
+                    if (val < fechaInicio) {
+                      alert('La fecha fin no puede ser anterior a la fecha inicio.');
+                      return;
+                    }
+                    setFechaFin(val);
+                  }}
+                  min={fechaInicio}
+                  max={getFechaAyer()}
+                  className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-lg text-base focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-white shadow-sm"
+                />
               </div>
 
               {/* Búsqueda */}
@@ -459,22 +392,22 @@ const hayJornadasCompletas = useMemo(() => {
               </div>
             </div>
 
-            {/* Checkbox para incluir completos */}
-            <div className="flex items-center gap-3 mt-4">
-              <label className="flex items-center gap-2 text-sm text-slate-200 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={incluirCompletos}
-                  onChange={(e) => setIncluirCompletos(e.target.checked)}
-                  disabled={cargando}
-                  className="rounded border-slate-500 bg-slate-800 text-emerald-500 focus:ring-emerald-500 disabled:opacity-50"
-                />
-                <span>Incluir jornadas completas {hayJornadasCompletas && !incluirCompletos && `(${estadisticas?.porEstado?.['COMPLETO'] || 0} ocultas)`}</span>
-              </label>
+            {/* Botón buscar rango */}
+            <div className="mt-4 flex items-center gap-3">
+              <button
+                onClick={cargarFaltas}
+                disabled={cargando}
+                className="px-6 py-2 bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 text-white rounded-lg text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                Buscar
+              </button>
             </div>
           </div>
 
-          {/* Columna 2: Resumen */}
+          {/* Resumen */}
           <div className="bg-gradient-to-br from-purple-900/60 to-purple-800/60 rounded-lg border border-purple-500/30 p-4 shadow-lg lg:col-span-1">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-purple-200 uppercase tracking-wide">Resumen</h3>
@@ -483,24 +416,23 @@ const hayJornadasCompletas = useMemo(() => {
               </svg>
             </div>
             <div className="text-center">
-              <div className="text-4xl font-bold text-white mb-3">
-                {estadisticas?.totalRegistros || 0}
+              <div className="text-4xl font-bold text-white mb-1">
+                {registrosFiltrados.length}
               </div>
               <div className="text-sm text-purple-200 font-medium">
-                Registros en BD
+                Con novedades
               </div>
               <div className="text-xs text-purple-300 mt-2">
-                Mostrando: {registrosFiltrados.length} registros
+                Total BD: {estadisticas?.totalRegistros || 0}
               </div>
             </div>
           </div>
         </div>
 
-        {/* TERCERA FILA: Filtros por Estado */}
+        {/* Filtros por Estado */}
         {estadosDisponibles.length > 0 && (
           <div className="pt-4 border-t border-slate-500/50">
             <div className="flex items-start md:items-center gap-3 mb-3 flex-col md:flex-row">
-              {/* Título y contador */}
               <div className="flex items-center text-sm font-medium text-slate-200">
                 <svg className="w-4 h-4 mr-2 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M3 3a1 1 0 011-1h12a1 1 0 011 1v3a1 1 0 01-.293.707L12 11.414V15a1 1 0 01-.293.707l-2 2A1 1 0 018 17v-5.586L3.293 6.707A1 1 0 013 6V3z" clipRule="evenodd" />
@@ -511,54 +443,37 @@ const hayJornadasCompletas = useMemo(() => {
                 </span>
               </div>
 
-              {/* Botón Todos */}
               <div className="flex-shrink-0">
                 <button
-                  onClick={() => {
-                    setFiltroEstado('');
-                    setFiltroGravedad('');
-                  }}
+                  onClick={() => { setFiltroEstado(''); setFiltroGravedad(''); }}
                   className={`transition-all duration-200 px-3 py-1.5 rounded-lg border flex-shrink-0 shadow-sm text-xs font-medium ${
                     !filtroEstado && !filtroGravedad
                       ? 'bg-gradient-to-br from-emerald-700 to-emerald-600 border-emerald-500/50 text-white'
-                      : 'bg-gradient-to-br from-slate-700/80 to-slate-800/80 hover:from-slate-600/80 hover:to-slate-700/80 border-slate-600/40 hover:border-slate-500/50 text-slate-200'
+                      : 'bg-gradient-to-br from-slate-700/80 to-slate-800/80 hover:from-slate-600/80 hover:to-slate-700/80 border-slate-600/40 text-slate-200'
                   }`}
                 >
-                  <div className="flex items-center gap-1.5">
-                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clipRule="evenodd" />
-                    </svg>
-                    Todos
-                  </div>
+                  Todos
                 </button>
               </div>
 
-              {/* Botones de estados */}
               <div className="overflow-x-auto flex-1">
                 <div className="flex gap-1.5 min-w-min pb-1">
                   {estadosDisponibles.map((estado) => {
                     const isActive = filtroEstado === estado.id;
-
                     return (
                       <button
                         key={estado.id}
-                        onClick={() => {
-                          setFiltroEstado(isActive ? '' : estado.id);
-                          setFiltroGravedad('');
-                        }}
+                        onClick={() => { setFiltroEstado(isActive ? '' : estado.id); setFiltroGravedad(''); }}
                         className={`transition-all duration-200 px-3 py-1.5 rounded-lg border flex-shrink-0 shadow-sm text-xs font-medium ${
                           isActive
                             ? `bg-gradient-to-br ${getEstadoColor(estado.id)} text-white`
-                            : 'bg-gradient-to-br from-slate-700/80 to-slate-800/80 hover:from-slate-600/80 hover:to-slate-700/80 border-slate-600/40 hover:border-slate-500/50 text-slate-200'
+                            : 'bg-gradient-to-br from-slate-700/80 to-slate-800/80 hover:from-slate-600/80 hover:to-slate-700/80 border-slate-600/40 text-slate-200'
                         }`}
-                        title={`${estado.nombre} - ${estado.porcentaje}% (${estado.count} registros)`}
                       >
                         <div className="text-xs font-medium flex items-center gap-1.5">
                           <span className="truncate max-w-[120px]">{estado.nombre}</span>
                           <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold min-w-[20px] flex items-center justify-center ${
-                            isActive
-                              ? 'bg-white/20 text-white'
-                              : 'bg-slate-900/50 text-slate-300'
+                            isActive ? 'bg-white/20 text-white' : 'bg-slate-900/50 text-slate-300'
                           }`}>
                             {estado.count}
                           </span>
@@ -573,13 +488,13 @@ const hayJornadasCompletas = useMemo(() => {
             {/* Filtro de gravedad */}
             <div className="flex items-center gap-2 mt-2 text-xs">
               <span className="text-slate-400">Filtrar por gravedad:</span>
-              {['ALTA', 'MEDIA', 'BAJA', 'NINGUNA'].map((g) => (
+              {(['ALTA', 'MEDIA', 'BAJA'] as const).map((g) => (
                 <button
                   key={g}
                   onClick={() => setFiltroGravedad(filtroGravedad === g ? '' : g)}
                   className={`px-2 py-1 rounded-md transition-colors ${
                     filtroGravedad === g
-                      ? coloresGravedad[g as keyof typeof coloresGravedad]
+                      ? coloresGravedad[g]
                       : 'bg-slate-700/50 text-slate-300 hover:bg-slate-600/50'
                   }`}
                 >
@@ -598,9 +513,7 @@ const hayJornadasCompletas = useMemo(() => {
             <svg className="w-6 h-6 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
               <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
             </svg>
-            <div>
-              <span className="font-semibold">{error}</span>
-            </div>
+            <span className="font-semibold">{error}</span>
           </div>
         </div>
       )}
@@ -616,18 +529,14 @@ const hayJornadasCompletas = useMemo(() => {
                   ? 'bg-gradient-to-r from-red-900/60 to-red-800/60 border-red-500/30' 
                   : rec.tipo === 'ATENCIÓN'
                   ? 'bg-gradient-to-r from-yellow-900/60 to-yellow-800/60 border-yellow-500/30'
-                  : rec.tipo === 'INFORMACIÓN'
-                  ? 'bg-gradient-to-r from-blue-900/60 to-blue-800/60 border-blue-500/30'
                   : 'bg-gradient-to-r from-blue-900/60 to-blue-800/60 border-blue-500/30'
               }`}
             >
               <div className="flex items-start gap-3">
-                <div className={`px-2 py-1 rounded text-xs font-bold ${
-                  rec.tipo === 'URGENTE' 
-                    ? 'bg-red-700 text-white' 
-                    : rec.tipo === 'ATENCIÓN'
-                    ? 'bg-yellow-700 text-white'
-                    : 'bg-blue-700 text-white'
+                <div className={`px-2 py-1 rounded text-xs font-bold flex-shrink-0 ${
+                  rec.tipo === 'URGENTE' ? 'bg-red-700 text-white' 
+                  : rec.tipo === 'ATENCIÓN' ? 'bg-yellow-700 text-white'
+                  : 'bg-blue-700 text-white'
                 }`}>
                   {rec.tipo}
                 </div>
@@ -641,20 +550,19 @@ const hayJornadasCompletas = useMemo(() => {
         </div>
       )}
 
-      {/* Estadísticas Filtradas */}
+      {/* Estadísticas */}
       {estadisticasFiltradas.totalRegistros > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          {/* Tarjeta 1: Total de registros filtrados y gravedad */}
           <div className="bg-gradient-to-br from-blue-900/60 to-blue-800/60 rounded-lg border border-blue-500/30 p-6 shadow-lg">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold text-blue-200 uppercase tracking-wide">Registros Filtrados</h3>
+              <h3 className="text-sm font-semibold text-blue-200 uppercase tracking-wide">Registros con Novedad</h3>
               <svg className="w-6 h-6 text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
               </svg>
             </div>
             <div className="text-center">
               <div className="text-5xl font-bold text-white mb-3">{estadisticasFiltradas.totalRegistros}</div>
-              <div className="grid grid-cols-3 gap-2 text-xs">
+              <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="bg-blue-800/40 p-2 rounded">
                   <div className="text-blue-200 font-semibold">Alta</div>
                   <div className="text-white text-lg font-bold">{estadisticasFiltradas.porGravedad.ALTA}</div>
@@ -663,15 +571,10 @@ const hayJornadasCompletas = useMemo(() => {
                   <div className="text-blue-200 font-semibold">Media</div>
                   <div className="text-white text-lg font-bold">{estadisticasFiltradas.porGravedad.MEDIA}</div>
                 </div>
-                <div className="bg-blue-800/40 p-2 rounded">
-                  <div className="text-blue-200 font-semibold">Baja</div>
-                  <div className="text-white text-lg font-bold">{estadisticasFiltradas.porGravedad.BAJA}</div>
-                </div>
               </div>
             </div>
           </div>
 
-          {/* Tarjeta 2: Almuerzos */}
           <div className="bg-gradient-to-br from-green-900/60 to-green-800/60 rounded-lg border border-green-500/30 p-6 shadow-lg">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-green-200 uppercase tracking-wide">Estadísticas de Almuerzos</h3>
@@ -697,12 +600,16 @@ const hayJornadasCompletas = useMemo(() => {
                 <div className="text-xs text-green-200 mt-1">Incompletos</div>
               </div>
             </div>
+            {estadisticasFiltradas.almuerzos.noAplica > 0 && (
+              <div className="mt-3 text-center text-xs text-green-300 bg-green-900/40 rounded p-1">
+                {estadisticasFiltradas.almuerzos.noAplica} empleados PARLO (sin requerir almuerzo)
+              </div>
+            )}
           </div>
 
-          {/* Tarjeta 3: Estados Filtrados */}
           <div className="bg-gradient-to-br from-purple-900/60 to-purple-800/60 rounded-lg border border-purple-500/30 p-6 shadow-lg">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold text-purple-200 uppercase tracking-wide">Estados Filtrados</h3>
+              <h3 className="text-sm font-semibold text-purple-200 uppercase tracking-wide">Estados</h3>
               <svg className="w-6 h-6 text-purple-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
               </svg>
@@ -724,12 +631,14 @@ const hayJornadasCompletas = useMemo(() => {
         </div>
       )}
 
-      {/* Tabla de faltas */}
+      {/* Tabla */}
       <div className="overflow-x-auto rounded-lg shadow-lg bg-white border border-slate-200">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gradient-to-r from-slate-700 to-slate-800 text-white text-sm">
             <tr>
               <th className="py-3 px-4 text-left font-semibold">Empleado</th>
+              {esRango && <th className="py-3 px-4 text-left font-semibold">Fecha</th>}
+              <th className="py-3 px-4 text-left font-semibold">Campaña</th>
               <th className="py-3 px-4 text-left font-semibold">Estado</th>
               <th className="py-3 px-4 text-left font-semibold">Horarios</th>
               <th className="py-3 px-4 text-left font-semibold">Almuerzo</th>
@@ -740,7 +649,7 @@ const hayJornadasCompletas = useMemo(() => {
           {cargando ? (
             <tbody>
               <tr>
-                <td colSpan={5} className="text-center py-10 text-gray-600">
+                <td colSpan={esRango ? 7 : 6} className="text-center py-10 text-gray-600">
                   <div className="flex flex-col items-center gap-3">
                     <div className="h-10 w-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
                     <span className="font-medium text-gray-700">Cargando registros...</span>
@@ -752,7 +661,7 @@ const hayJornadasCompletas = useMemo(() => {
             <tbody className="bg-white divide-y divide-gray-200">
               {registrosFiltrados.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="text-center py-10 text-gray-600">
+                  <td colSpan={esRango ? 7 : 6} className="text-center py-10 text-gray-600">
                     <div className="flex flex-col items-center gap-3">
                       <svg className="w-12 h-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -760,15 +669,11 @@ const hayJornadasCompletas = useMemo(() => {
                       <div>
                         <p className="font-medium text-gray-700">
                           {todosRegistros.length === 0
-                            ? 'No hay registros para esta fecha'
-                            : !incluirCompletos && hayJornadasCompletas && registrosFiltrados.length === 0
-                            ? 'Solo hay jornadas completas. Activa "Incluir jornadas completas" para verlas.'
+                            ? 'No hay registros con novedades para el rango seleccionado'
                             : 'No se encontraron registros con los filtros aplicados'}
                         </p>
                         {(filtroEstado || filtroGravedad || busqueda) && (
-                          <p className="text-sm text-gray-500 mt-1">
-                            Intenta quitando los filtros
-                          </p>
+                          <p className="text-sm text-gray-500 mt-1">Intenta quitando los filtros</p>
                         )}
                       </div>
                     </div>
@@ -776,7 +681,7 @@ const hayJornadasCompletas = useMemo(() => {
                 </tr>
               ) : (
                 registrosFiltrados.map((falta, index) => (
-                  <tr key={`${falta.documento}-${index}`} className="hover:bg-gray-50 transition-colors">
+                  <tr key={`${falta.documento}-${falta.fecha}-${index}`} className="hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-4 whitespace-nowrap">
                       <div className="flex items-center">
                         <div className="flex-shrink-0 h-10 w-10">
@@ -785,14 +690,28 @@ const hayJornadasCompletas = useMemo(() => {
                           </div>
                         </div>
                         <div className="ml-4">
-                          <div className="text-sm font-semibold text-gray-900">
-                            {falta.nombre || 'Sin nombre'}
-                          </div>
-                          <div className="text-xs text-gray-600 font-medium">
-                            {falta.documento || 'Sin documento'}
-                          </div>
+                          <div className="text-sm font-semibold text-gray-900">{falta.nombre || 'Sin nombre'}</div>
+                          <div className="text-xs text-gray-600 font-medium">{falta.documento || 'Sin documento'}</div>
                         </div>
                       </div>
+                    </td>
+
+                    {esRango && (
+                      <td className="px-4 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-700 font-medium">
+                          {falta.fecha ? new Date(falta.fecha + 'T00:00:00').toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' }) : '--'}
+                        </div>
+                      </td>
+                    )}
+
+                    <td className="px-4 py-4 whitespace-nowrap">
+                      {falta.campana ? (
+                        <span className="text-xs font-medium px-2 py-1 bg-slate-100 text-slate-700 rounded-full border border-slate-200">
+                          {falta.campana}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-400">—</span>
+                      )}
                     </td>
                     
                     <td className="px-4 py-4">
@@ -814,14 +733,18 @@ const hayJornadasCompletas = useMemo(() => {
                           <span className="w-16 text-gray-600 text-xs font-medium">Salida:</span>
                           <span className="font-bold text-gray-900">{falta.horas.salida}</span>
                         </div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="w-16 text-gray-600 text-xs font-medium">Salida Alm:</span>
-                          <span className="font-bold text-gray-900">{falta.horas.salidaAlmuerzo}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="w-16 text-gray-600 text-xs font-medium">Entrada Alm:</span>
-                          <span className="font-bold text-gray-900">{falta.horas.entradaAlmuerzo}</span>
-                        </div>
+                        {falta.campana !== 'Campaña PARLO' && (
+                          <>
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="w-16 text-gray-600 text-xs font-medium">Sal. Alm:</span>
+                              <span className="font-bold text-gray-900">{falta.horas.salidaAlmuerzo}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="w-16 text-gray-600 text-xs font-medium">Ent. Alm:</span>
+                              <span className="font-bold text-gray-900">{falta.horas.entradaAlmuerzo}</span>
+                            </div>
+                          </>
+                        )}
                       </div>
                     </td>
                     
@@ -829,7 +752,7 @@ const hayJornadasCompletas = useMemo(() => {
                       <span className={`px-3 py-2 rounded-lg text-xs font-medium flex items-center gap-2 ${
                         coloresAlmuerzo[falta.almuerzo?.estado as keyof typeof coloresAlmuerzo] || 'bg-gray-100 text-gray-800'
                       }`}>
-                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                        <svg className="w-3 h-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                           <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-8.707l-3-3a1 1 0 00-1.414 0l-3 3a1 1 0 001.414 1.414L9 9.414V13a1 1 0 102 0V9.414l1.293 1.293a1 1 0 001.414-1.414z" clipRule="evenodd" />
                         </svg>
                         {falta.almuerzo?.mensaje || 'Estado desconocido'}
@@ -866,7 +789,7 @@ const hayJornadasCompletas = useMemo(() => {
             <div>
               <h3 className="text-lg font-semibold text-slate-100 mb-1">Resumen del Reporte</h3>
               <div className="text-sm text-slate-300">
-                Mostrando {registrosFiltrados.length} de {estadisticas?.totalRegistros || 0} registros totales
+                Mostrando {registrosFiltrados.length} de {estadisticas?.totalRegistros || 0} registros totales (jornadas completas excluidas)
               </div>
             </div>
             <div className="flex flex-wrap gap-3 text-sm">
@@ -885,17 +808,8 @@ const hayJornadasCompletas = useMemo(() => {
                   Búsqueda: {busqueda}
                 </span>
               )}
-              {incluirCompletos ? (
-                <span className="px-3 py-1.5 bg-green-700/30 text-green-200 rounded-full border border-green-500/30">
-                  Incluye completos
-                </span>
-              ) : (
-                <span className="px-3 py-1.5 bg-yellow-700/30 text-yellow-200 rounded-full border border-yellow-500/30">
-                  Sin completos
-                </span>
-              )}
               <span className="px-3 py-1.5 bg-purple-700/30 text-purple-200 rounded-full border border-purple-500/30">
-                Fecha: {fecha}
+                {fechaInicio === fechaFin ? `Fecha: ${fechaInicio}` : `Del ${fechaInicio} al ${fechaFin}`}
               </span>
             </div>
           </div>

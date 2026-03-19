@@ -274,10 +274,18 @@ export default function Navbar() {
                 <span className="font-medium">Asistencias</span>
               </Link>
             </div>
+
             <div className="h-full flex items-center hover:bg-green-50 hover:text-green-700 transition rounded-lg px-4">
               <Link href="/faltas" className="flex items-center gap-2">
                 <i className="bi bi-clock-fill"></i>
                 <span className="font-medium">Faltas</span>
+              </Link>
+            </div>
+
+            <div className="h-full flex items-center hover:bg-green-50 hover:text-green-700 transition rounded-lg px-4">
+              <Link href="/nocturno" className="flex items-center gap-2">
+                <i className="bi bi-moon-stars-fill"></i>
+                <span className="font-medium">Nocturnos</span>
               </Link>
             </div>
           </div>
@@ -378,6 +386,21 @@ export default function Navbar() {
                     </div>
                   </Link>
                 )}
+
+                {/* Nocturnos en el menú móvil desplegable */}
+                <Link
+                  href="/nocturno"
+                  className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition"
+                  onClick={() => setOpen(false)}
+                >
+                  <div className="w-8 h-8 rounded-lg bg-green-100 flex items-center justify-center">
+                    <i className="bi bi-moon-stars-fill text-green-600"></i>
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-900">Nocturnos</p>
+                    <p className="text-xs text-gray-500">Salidas después de 19:00</p>
+                  </div>
+                </Link>
 
                 {/* BOTÓN DE LOGOUT - USAR LA VERSIÓN SIMPLE */}
                 <button

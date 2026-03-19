@@ -9,7 +9,18 @@ const DB_CONFIG = {
   password: process.env.DB_PASSWORD
 };
 
-const analizarAlmuerzo = (horaSalidaAlmuerzo, horaEntradaAlmuerzo) => {
+const CAMPANA_SIN_ALMUERZO = 'Campaña PARLO';
+
+const analizarAlmuerzo = (horaSalidaAlmuerzo, horaEntradaAlmuerzo, campana) => {
+  // Empleados de campaña PARLO no requieren registro de almuerzo
+  if (campana === CAMPANA_SIN_ALMUERZO) {
+    return {
+      estado: 'NO_APLICA',
+      mensaje: 'No aplica (Campaña PARLO)',
+      tieneProblema: false
+    };
+  }
+
   if (!horaSalidaAlmuerzo && !horaEntradaAlmuerzo) {
     return {
       estado: 'NO_REGISTRADO',
@@ -80,15 +91,21 @@ const analizarAlmuerzo = (horaSalidaAlmuerzo, horaEntradaAlmuerzo) => {
   };
 };
 
-const determinarEstadoAsistencia = (registro) => {
+const determinarEstadoAsistencia = (registro, campana) => {
   const tieneEntrada = !!registro.hora_entrada;
   const tieneSalida = !!registro.hora_salida;
   const tieneSalidaAlmuerzo = !!registro.hora_salida_almuerzo;
   const tieneEntradaAlmuerzo = !!registro.hora_entrada_almuerzo;
+  const esParlo = campana === CAMPANA_SIN_ALMUERZO;
   
   // Jornada completa
-  if (tieneEntrada && tieneSalida && tieneSalidaAlmuerzo && tieneEntradaAlmuerzo) {
-    return 'COMPLETO';
+  if (esParlo) {
+    // Para PARLO: completo si tiene entrada y salida (almuerzo no importa)
+    if (tieneEntrada && tieneSalida) return 'COMPLETO';
+  } else {
+    if (tieneEntrada && tieneSalida && tieneSalidaAlmuerzo && tieneEntradaAlmuerzo) {
+      return 'COMPLETO';
+    }
   }
   
   // Problemas de entrada/salida
@@ -97,10 +114,12 @@ const determinarEstadoAsistencia = (registro) => {
   if (!tieneEntrada && !tieneSalida && (tieneSalidaAlmuerzo || tieneEntradaAlmuerzo)) return 'SOLO_ALMUERZO';
   if (!tieneEntrada && !tieneSalida && !tieneSalidaAlmuerzo && !tieneEntradaAlmuerzo) return 'SIN_MARCAS';
   
-  // Problemas de almuerzo
-  if (tieneEntrada && tieneSalida && !tieneSalidaAlmuerzo && !tieneEntradaAlmuerzo) return 'SIN_ALMUERZO';
-  if (tieneEntrada && tieneSalida && tieneSalidaAlmuerzo && !tieneEntradaAlmuerzo) return 'FALTA_ENTRADA_ALMUERZO';
-  if (tieneEntrada && tieneSalida && !tieneSalidaAlmuerzo && tieneEntradaAlmuerzo) return 'FALTA_SALIDA_ALMUERZO';
+  // Problemas de almuerzo (solo para no-PARLO)
+  if (!esParlo) {
+    if (tieneEntrada && tieneSalida && !tieneSalidaAlmuerzo && !tieneEntradaAlmuerzo) return 'SIN_ALMUERZO';
+    if (tieneEntrada && tieneSalida && tieneSalidaAlmuerzo && !tieneEntradaAlmuerzo) return 'FALTA_ENTRADA_ALMUERZO';
+    if (tieneEntrada && tieneSalida && !tieneSalidaAlmuerzo && tieneEntradaAlmuerzo) return 'FALTA_SALIDA_ALMUERZO';
+  }
   
   return 'OTRO';
 };
@@ -119,7 +138,25 @@ const GRAVEDAD_ESTADOS = {
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
-  const fecha = searchParams.get('fecha') || new Date().toISOString().split('T')[0];
+  
+  // Soporte para fecha única o rango de fechas
+  const fecha = searchParams.get('fecha');
+  const fechaInicio = searchParams.get('fechaInicio');
+  const fechaFin = searchParams.get('fechaFin');
+  
+  // Determinar rango efectivo
+  let rangoInicio, rangoFin;
+  if (fechaInicio && fechaFin) {
+    rangoInicio = fechaInicio;
+    rangoFin = fechaFin;
+  } else if (fecha) {
+    rangoInicio = fecha;
+    rangoFin = fecha;
+  } else {
+    const ayer = new Date();
+    ayer.setDate(ayer.getDate() - 1);
+    rangoInicio = rangoFin = ayer.toISOString().split('T')[0];
+  }
   
   const client = new Client(DB_CONFIG);
   
@@ -128,35 +165,42 @@ export async function GET(request) {
     
     const query = `
       SELECT 
-        documento,
-        nombre,
-        hora_entrada,
-        hora_salida,
-        hora_salida_almuerzo,
-        hora_entrada_almuerzo,
-        dispositivo_ip,
-        created_at
-      FROM attendance_events 
-      WHERE fecha = $1
-      ORDER BY nombre
+        ae.documento,
+        ae.nombre,
+        ae.fecha,
+        ae.hora_entrada,
+        ae.hora_salida,
+        ae.hora_salida_almuerzo,
+        ae.hora_entrada_almuerzo,
+        ae.dispositivo_ip,
+        ae.created_at,
+        hu.departamento
+      FROM attendance_events ae
+      LEFT JOIN hikvision_users hu 
+        ON ae.documento = hu.employee_no
+      WHERE ae.fecha BETWEEN $1 AND $2
+      ORDER BY ae.fecha, ae.nombre
     `;
     
-    const queryParams = [fecha];
-    const result = await client.query(query, queryParams);
+    const result = await client.query(query, [rangoInicio, rangoFin]);
     
-    // Procesar todos los registros sin ningún filtro
+    // Procesar todos los registros
     const registrosProcesados = result.rows.map(row => {
-      const estadoAsistencia = determinarEstadoAsistencia(row);
+      const campana = row.departamento || '';
+      const estadoAsistencia = determinarEstadoAsistencia(row, campana);
       const nivelGravedad = GRAVEDAD_ESTADOS[estadoAsistencia] || 'BAJA';
       
       const analisisAlmuerzo = analizarAlmuerzo(
         row.hora_salida_almuerzo,
-        row.hora_entrada_almuerzo
+        row.hora_entrada_almuerzo,
+        campana
       );
       
       return {
         documento: row.documento,
         nombre: row.nombre,
+        fecha: row.fecha,
+        campana: campana,
         estado: estadoAsistencia,
         gravedad: nivelGravedad,
         horas: {
@@ -174,10 +218,14 @@ export async function GET(request) {
         ultimaActualizacion: row.created_at
       };
     });
+
+    // Filtrar jornadas completas — nunca se muestran
+    const registrosFiltrados = registrosProcesados.filter(r => r.estado !== 'COMPLETO');
     
-    // Estadísticas basadas en TODOS los registros
+    // Estadísticas basadas en TODOS los registros (incluyendo completos para referencia)
     const estadisticas = {
       totalRegistros: registrosProcesados.length,
+      totalIncompletos: registrosFiltrados.length,
       porEstado: {},
       porGravedad: {
         NINGUNA: 0,
@@ -189,36 +237,24 @@ export async function GET(request) {
         completos: 0,
         incompletos: 0,
         noRegistrados: 0,
+        noAplica: 0,
         cortos: 0,
         largos: 0,
         normales: 0
       }
     };
     
-    registrosProcesados.forEach(registro => {
-      // Por estado
+    registrosFiltrados.forEach(registro => {
       estadisticas.porEstado[registro.estado] = (estadisticas.porEstado[registro.estado] || 0) + 1;
-      
-      // Por gravedad
       estadisticas.porGravedad[registro.gravedad] = (estadisticas.porGravedad[registro.gravedad] || 0) + 1;
       
-      // Almuerzos
       switch (registro.almuerzo.estado) {
-        case 'NORMAL':
-          estadisticas.almuerzos.normales++;
-          break;
-        case 'CURTO':
-          estadisticas.almuerzos.cortos++;
-          break;
-        case 'LARGO':
-          estadisticas.almuerzos.largos++;
-          break;
-        case 'INCOMPLETO':
-          estadisticas.almuerzos.incompletos++;
-          break;
-        case 'NO_REGISTRADO':
-          estadisticas.almuerzos.noRegistrados++;
-          break;
+        case 'NORMAL': estadisticas.almuerzos.normales++; break;
+        case 'CURTO': estadisticas.almuerzos.cortos++; break;
+        case 'LARGO': estadisticas.almuerzos.largos++; break;
+        case 'INCOMPLETO': estadisticas.almuerzos.incompletos++; break;
+        case 'NO_REGISTRADO': estadisticas.almuerzos.noRegistrados++; break;
+        case 'NO_APLICA': estadisticas.almuerzos.noAplica++; break;
       }
       
       if (registro.horas.salidaAlmuerzo !== '--:--' && registro.horas.entradaAlmuerzo !== '--:--') {
@@ -226,13 +262,12 @@ export async function GET(request) {
       }
     });
     
-    // Resumen por estado
     const resumenPorEstado = Object.entries(estadisticas.porEstado)
       .map(([estado, cantidad]) => ({
-        estado: estado,
-        cantidad: cantidad,
+        estado,
+        cantidad,
         gravedad: GRAVEDAD_ESTADOS[estado] || 'BAJA',
-        porcentaje: Math.round((cantidad / registrosProcesados.length) * 100) || 0
+        porcentaje: Math.round((cantidad / (registrosFiltrados.length || 1)) * 100)
       }))
       .sort((a, b) => {
         const ordenGravedad = { ALTA: 1, MEDIA: 2, BAJA: 3, NINGUNA: 4 };
@@ -244,15 +279,17 @@ export async function GET(request) {
     
     return NextResponse.json({
       success: true,
-      fecha: fecha,
+      fechaInicio: rangoInicio,
+      fechaFin: rangoFin,
+      esRango: rangoInicio !== rangoFin,
       metadata: {
         fechaConsulta: new Date().toISOString(),
-        totalRegistros: registrosProcesados.length
+        totalRegistros: registrosProcesados.length,
+        totalIncompletos: registrosFiltrados.length
       },
-      estadisticas: estadisticas,
+      estadisticas,
       resumen: resumenPorEstado,
-      registros: registrosProcesados, // Todos los registros sin límite
-      recomendaciones: [], // Las recomendaciones se generan en el componente
+      registros: registrosFiltrados,
       alertas: {
         requiereAccionInmediata: estadisticas.porGravedad.ALTA > 0,
         requiereSeguimiento: estadisticas.porGravedad.MEDIA > 0,
@@ -267,7 +304,6 @@ export async function GET(request) {
     return NextResponse.json({
       success: false,
       error: error.message,
-      fecha: fecha,
       timestamp: new Date().toISOString()
     }, { status: 500 });
     
