@@ -120,7 +120,6 @@ export async function GET(request: NextRequest) {
     );
     const existingDepartments = deptCheckResult.rows.map(r => r.departamento);
 
-    // ✅ Se agrega device_ip al SELECT para usarlo en la URL de la foto
     let query = `
       SELECT 
         id,
@@ -188,8 +187,6 @@ export async function GET(request: NextRequest) {
         rol: usuario.tipoUsuario,
         campana: campanaCode,
         departamento: usuario.departamento || 'No asignado',
-        // ✅ deviceIp incluido para que el componente construya la URL de la foto
-        // correctamente apuntando al dispositivo exacto donde está la foto
         deviceIp: usuario.deviceIp || null
       };
     });
@@ -241,6 +238,95 @@ export async function GET(request: NextRequest) {
     });
 
   } catch (error: any) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session || !session.user) {
+      return NextResponse.json({ success: false, error: 'No autorizado' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const {
+      employeeNo,
+      numeroEmpleado,
+      nombre,
+      departamento,
+      genero,
+      tipoUsuario,
+      estado,
+      deviceIp,
+      fotoPath,
+    } = body;
+
+    // Aceptar employeeNo o numeroEmpleado (el frontend puede mandar cualquiera de los dos)
+    const empNo = String(employeeNo || numeroEmpleado || '').trim();
+
+    if (!empNo || !nombre) {
+      return NextResponse.json(
+        { success: false, error: 'employeeNo y nombre son requeridos' },
+        { status: 400 }
+      );
+    }
+
+    const deptNormalizado = departamento || 'No asignado';
+
+    await pool.query(
+      `INSERT INTO hikvision_users (
+        employee_no,
+        nombre,
+        departamento,
+        genero,
+        tipo_usuario,
+        estado,
+        device_ip,
+        foto_path,
+        fecha_creacion,
+        fecha_modificacion
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+      ON CONFLICT (employee_no) DO UPDATE SET
+        nombre             = EXCLUDED.nombre,
+        departamento       = EXCLUDED.departamento,
+        genero             = EXCLUDED.genero,
+        tipo_usuario       = EXCLUDED.tipo_usuario,
+        estado             = EXCLUDED.estado,
+        device_ip          = EXCLUDED.device_ip,
+        foto_path          = EXCLUDED.foto_path,
+        fecha_modificacion = NOW()`,
+      [
+        empNo,
+        nombre.trim(),
+        deptNormalizado,
+        genero || 'No especificado',
+        tipoUsuario || 'Normal',
+        estado || 'Activo',
+        deviceIp || null,
+        fotoPath || null,
+      ]
+    );
+
+    console.log(`✅ Usuario ${empNo} (${nombre}) insertado/actualizado en BD`);
+
+    return NextResponse.json({ success: true, employeeNo: empNo });
+
+  } catch (error: any) {
+    console.error('❌ Error insertando usuario en BD:', error.message);
+
+    // El ON CONFLICT requiere UNIQUE en employee_no — si falla con este código
+    // es porque falta el constraint. Mensaje claro para identificarlo rápido.
+    if (error.code === '42P10' || error.message?.includes('ON CONFLICT')) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Falta constraint UNIQUE en employee_no. Ejecuta: ALTER TABLE hikvision_users ADD CONSTRAINT hikvision_users_employee_no_unique UNIQUE (employee_no);'
+        },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

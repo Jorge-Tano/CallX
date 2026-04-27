@@ -78,7 +78,7 @@ async function deleteUserFromDatabase(employeeNo) {
     // 1. Primero verificar si el usuario existe
     const checkQuery = `
       SELECT employee_no, nombre 
-      FROM usuarios_hikvision 
+      FROM hikvision_users  
       WHERE employee_no = $1
     `;
     
@@ -98,7 +98,7 @@ async function deleteUserFromDatabase(employeeNo) {
     
     // 2. Eliminar el usuario
     const deleteQuery = `
-      DELETE FROM usuarios_hikvision 
+      DELETE FROM hikvision_users  
       WHERE employee_no = $1 
       RETURNING employee_no, nombre
     `;
@@ -238,7 +238,7 @@ export async function GET() {
     usage: {
       method: "POST",
       body: "{ employeeNo: 'numeroEmpleado' }",
-      note: "Elimina físicamente el usuario de la tabla usuarios_hikvision"
+      note: "Elimina físicamente el usuario de la tabla hikvision_users "
     }
   });
 }

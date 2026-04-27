@@ -7,7 +7,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 const CONFIG = {
   username: process.env.HIKUSER,
   password: process.env.HIKPASS,
-  devices: [process.env.HIKVISION_IP1, process.env.HIKVISION_IP2].filter(Boolean)
+  devices: [/*process.env.HIKVISION_IP1,*/ process.env.HIKVISION_IP2].filter(Boolean)
 };
 
 const httpsAgent = new https.Agent({ rejectUnauthorized: false });

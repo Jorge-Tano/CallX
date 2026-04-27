@@ -21,7 +21,7 @@ export default function UsuariosPage() {
   const [usuarioEditando, setUsuarioEditando] = useState<Usuario | null>(null);
   const [usuarioAEliminar, setUsuarioAEliminar] = useState<Usuario | null>(null);
   const [departamentoFiltro, setDepartamentoFiltro] = useState<string | null>(null);
-  
+
   // Estado para la página actual de paginación
   const [paginaActual, setPaginaActual] = useState<number>(() => {
     // Intentar recuperar la página guardada al inicializar
@@ -58,20 +58,34 @@ export default function UsuariosPage() {
   // Determinar si es TI o Administrador (acceso global)
   const isGlobalAccess = userRole === 'TI' || userRole === 'Administrador';
 
+  // ========== NUEVA FUNCIÓN PARA EXPORTAR A SHAREPOINT ==========
+  const exportarUsuariosASharepoint = async (usuariosAExportar: Usuario[]) => {
+    console.log("📤 Iniciando exportación en segundo plano...");
+    try {
+      const response = await fetch('/api/exportToSharepoint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usuarios: usuariosAExportar }),
+      });
+      const result = await response.json();
+      if (!result.success) console.warn('⚠️ Error en exportación:', result.error);
+      else console.log('✅ Exportación completada');
+    } catch (error) {
+      console.error('❌ Error de red en exportación:', error);
+    }
+  };
+  // ==============================================================
+
   // Cargar usuarios (solo una vez al inicio)
-  const cargarUsuarios = async () => {
+  const cargarUsuarios = async (exportar = false) => {
     try {
       setCargando(true);
       setError(null);
 
-      // SIEMPRE cargar todos los usuarios sin filtro inicial
       const url = '/api/users/bd?limit=1000';
-
       const response = await fetch(url, {
         credentials: 'include',
-        headers: {
-          'Cache-Control': 'no-cache'
-        }
+        headers: { 'Cache-Control': 'no-cache' }
       });
 
       if (!response.ok) throw new Error(`Error ${response.status}`);
@@ -90,10 +104,13 @@ export default function UsuariosPage() {
 
         setUsuarios(usuariosFormateados);
 
-        // Establecer filtro inicial basado en la respuesta (para Team Leaders)
         if (isTeamLeader && data.metadata?.forcedDepartment) {
-          // Team Leader: usar el departamento forzado por el backend
           setDepartamentoFiltro(data.metadata.forcedDepartment);
+        }
+
+        // 👇 NUEVO: exportar si se solicitó
+        if (exportar) {
+          await exportarUsuariosASharepoint(usuariosFormateados);
         }
       }
     } catch (error: any) {
@@ -151,7 +168,7 @@ export default function UsuariosPage() {
     } else {
       setDepartamentoFiltro(departamento);
     }
-    
+
     // Resetear a la primera página cuando se cambia el filtro
     setPaginaActual(1);
   };
@@ -163,41 +180,76 @@ export default function UsuariosPage() {
 
   // 🔥 FUNCIONES CRUD ACTUALIZADAS PARA RECARGAR PÁGINA
 
-  // Función para actualizar usuario - SIMPLIFICADA
+  // Función para ACTUALIZAR usuario
   const actualizarUsuario = async (usuarioActualizado: Usuario) => {
     try {
       setUsuarioEditando(null);
-      // Recargar después de editar
+
+      const usuariosActualizados = usuarios.map(u =>
+        u.employeeNo === usuarioActualizado.employeeNo ? usuarioActualizado : u
+      );
+
+      // 1. Actualizar UI inmediatamente
+      setUsuarios(usuariosActualizados);
+
+      // 2. Exportar en segundo plano — sin bloquear
       setTimeout(() => {
-        window.location.reload();
-      }, 500);
+        exportarUsuariosASharepoint(usuariosActualizados);
+      }, 0);
+
     } catch (error) {
       console.error('Error en actualización:', error);
     }
   };
 
-  // Función para eliminar usuario - SIMPLIFICADA
+  // Función para ELIMINAR usuario
   const eliminarUsuario = async (deletedEmployeeNo: string) => {
     try {
       setUsuarioAEliminar(null);
-      // Recargar después de eliminar
+
+      const usuariosFiltrados = usuarios.filter(u =>
+        u.employeeNo !== deletedEmployeeNo
+      );
+
+      // 1. Actualizar UI inmediatamente
+      setUsuarios(usuariosFiltrados);
+
+      // 2. Exportar en segundo plano — sin bloquear
       setTimeout(() => {
-        window.location.reload();
-      }, 500);
+        exportarUsuariosASharepoint(usuariosFiltrados);
+      }, 0);
+
     } catch (error) {
-      console.error('Error al procesar eliminación:', error);
+      console.error('Error al eliminar:', error);
     }
   };
 
-  // Función para crear usuario - CORREGIDA
-  const crearUsuario = async (usuarios: Usuario[]) => {
+  // Función para CREAR usuario
+  const crearUsuario = async (nuevosUsuarios: Usuario[]) => {
     try {
-      // Recargar la página después de crear
+      // 1. Insertar directamente en BD con los datos que ya tienes
+      for (const usuario of nuevosUsuarios) {
+        await fetch('/api/users/bd', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(usuario),
+        });
+      }
+
+      // 2. Recargar lista desde BD
+      await cargarUsuarios(false);
+
+      // 3. Exportar en segundo plano
       setTimeout(() => {
-        window.location.reload();
-      }, 1500);
+        setUsuarios(prev => {
+          exportarUsuariosASharepoint(prev);
+          return prev;
+        });
+      }, 0);
+
     } catch (error) {
-      console.error('Error recargando después de crear:', error);
+      console.error('Error creando usuario:', error);
     }
   };
 
@@ -246,7 +298,7 @@ export default function UsuariosPage() {
           <h3 className="text-red-800 font-semibold mb-2">Error al cargar usuarios</h3>
           <p className="text-red-600 mb-4">{error}</p>
           <button
-            onClick={cargarUsuarios}
+            onClick={() => cargarUsuarios(false)}
             className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
           >
             Reintentar

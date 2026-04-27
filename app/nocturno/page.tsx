@@ -165,7 +165,7 @@ export default function NocturnoPage() {
                                     </div>
                                     <div>
                                         <h1 className="text-xl font-bold text-gray-900">Recargos</h1>
-                                        <p className="text-gray-500 text-sm">Salida después de 19:00 o entrada antes de 06:00 · Más de 10 horas trabajadas</p>
+                                        <p className="text-gray-500 text-sm">Salida desde las 20:00 o entrada antes de 05:00 · Más de 10 horas trabajadas</p>
                                     </div>
                                 </div>
 
@@ -192,12 +192,12 @@ export default function NocturnoPage() {
                                 <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
                                     <div className="text-gray-500 text-xs font-medium uppercase tracking-wide mb-1">Salida tardía</div>
                                     <div className="text-2xl font-bold text-gray-900">{estadisticas.totalSalidaTardia}</div>
-                                    <div className="text-gray-400 text-xs mt-0.5"> después de 19:00</div>
+                                    <div className="text-gray-400 text-xs mt-0.5">🌙 desde las 20:00</div>
                                 </div>
                                 <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
                                     <div className="text-gray-500 text-xs font-medium uppercase tracking-wide mb-1">Entrada temprana</div>
                                     <div className="text-2xl font-bold text-gray-900">{estadisticas.totalEntradaTemprana}</div>
-                                    <div className="text-gray-400 text-xs mt-0.5"> antes de 06:00</div>
+                                    <div className="text-gray-400 text-xs mt-0.5">🌅 antes de 05:00</div>
                                 </div>
                                 <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
                                     <div className="text-gray-500 text-xs font-medium uppercase tracking-wide mb-1">Ambas condiciones</div>
@@ -412,15 +412,15 @@ export default function NocturnoPage() {
                         <div className="mt-4 flex flex-wrap gap-4 text-xs text-gray-500">
                             <div className="flex items-center gap-1.5">
                                 <span className="inline-block w-3 h-3 rounded-sm bg-indigo-100 border border-indigo-200" />
-                                Entrada antes de 06:00
+                                🌅 Entrada antes de 05:00
                             </div>
                             <div className="flex items-center gap-1.5">
                                 <span className="inline-block w-3 h-3 rounded-sm bg-blue-100 border border-blue-200" />
-                                Salida después de 19:00
+                                🌙 Salida desde las 20:00
                             </div>
                             <div className="flex items-center gap-1.5">
                                 <span className="inline-block w-3 h-3 rounded-sm bg-red-100 border border-red-200" />
-                                Ambas condiciones
+                                ⚠ Ambas condiciones
                             </div>
                             <div className="flex items-center gap-1.5">
                                 <span className="inline-block w-3 h-3 rounded-sm bg-yellow-100 border border-yellow-200" />

@@ -38,14 +38,15 @@ function calcularHorasTrabajadas(horaEntrada, horaSalida) {
 function minutosExtrasNoche(horaSalida) {
   const min = horaAMinutos(horaSalida);
   if (min === null) return 0;
-  return Math.max(0, min - 19 * 60);
+  // minutos después de las 20:00 (1200 min)
+  return Math.max(0, min - 20 * 60);
 }
 
 function minutosAntesManana(horaEntrada) {
   const min = horaAMinutos(horaEntrada);
   if (min === null) return 0;
-  // minutos antes de las 06:00 (360 min)
-  return Math.max(0, 360 - min);
+  // minutos antes de las 05:00 (300 min)
+  return Math.max(0, 300 - min);
 }
 
 function formatearHoras(horas) {
@@ -64,8 +65,9 @@ function formatearEventosNocturno(registros) {
     const minAntesManana = minutosAntesManana(horaEntrada);
 
     // Determinar tipo de recargo
-    const esSalidaTardia = horaAMinutos(horaSalida) > 19 * 60;
-    const esEntradaTemprana = horaAMinutos(horaEntrada) !== null && horaAMinutos(horaEntrada) < 6 * 60;
+    // Salida tardía = hora de salida en las 20:00 o más (EXTRACT HOUR > 19)
+    const esSalidaTardia = horaAMinutos(horaSalida) !== null && horaAMinutos(horaSalida) >= 20 * 60;
+    const esEntradaTemprana = horaAMinutos(horaEntrada) !== null && horaAMinutos(horaEntrada) < 5 * 60;
     const tipoRecargo = esSalidaTardia && esEntradaTemprana
       ? 'ambos'
       : esSalidaTardia
@@ -136,13 +138,13 @@ export async function GET(request) {
       WHERE hora_entrada IS NOT NULL
         AND hora_salida IS NOT NULL
         AND (
-          EXTRACT(HOUR FROM hora_salida::time) >= $1
-          OR EXTRACT(HOUR FROM hora_entrada::time) < $2
+          hora_salida::time >= '20:00:00'
+          OR hora_entrada::time < '05:00:00'
         )
     `;
 
-    const params = [horaLimiteSalida, horaLimiteEntrada];
-    let paramIndex = 3;
+    const params = [];
+    let paramIndex = 1;
 
     if (rango === 'hoy') {
       query += ` AND fecha = CURRENT_DATE`;

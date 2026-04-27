@@ -5,11 +5,11 @@ import DigestFetch from 'digest-fetch';
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 const DEVICES = [
-  {
-    ip: process.env.HIKVISION_IP1,
-    username: process.env.HIKUSER,
-    password: process.env.HIKPASS
-  },
+  // {
+  //   ip: process.env.HIKVISION_IP1,
+  //   username: process.env.HIKUSER,
+  //   password: process.env.HIKPASS
+  // },
   {
     ip: process.env.HIKVISION_IP2,
     username: process.env.HIKUSER,
@@ -190,7 +190,6 @@ export async function POST(request) {
       let deviceSuccessCount = 0;
 
       for (const device of DEVICES) {
-        console.log(`🔄 PROCESANDO USUARIO ${user.index}: ${user.nombre} EN DISPOSITIVO: ${device.ip}`);
         
         const deviceResult = await createUserOnDevice(device, user, user.departmentId);
         

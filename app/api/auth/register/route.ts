@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { pool } from "@/lib/db"
 
+
 export async function POST(request: NextRequest) {
   console.log("📝 Iniciando proceso de registro...")
   

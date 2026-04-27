@@ -1,6 +1,6 @@
 // utils/excelNocturno.ts
 import * as XLSX from 'xlsx';
-import { EventoNocturno } from '@/components/NocturnoTable';
+import { EventoNocturno } from '@/components/Nocturnotable';
 
 const formatearFechaExcel = (fechaString: string): string => {
   if (!fechaString) return '';
@@ -17,8 +17,8 @@ const formatearFechaExcel = (fechaString: string): string => {
 
 const tipoRecargoLabel = (tipo: EventoNocturno['tipoRecargo']): string => {
   if (tipo === 'ambos') return '⚠ Ambas condiciones';
-  if (tipo === 'salida_tardia') return 'Salida tardía';
-  return 'Entrada temprana';
+  if (tipo === 'salida_tardia') return '🌙 Salida tardía (≥20:00)';
+  return '🌅 Entrada temprana (<05:00)';
 };
 
 const descargarBuffer = (wb: XLSX.WorkBook, nombreArchivo: string) => {
@@ -121,7 +121,7 @@ export const descargarExcelNocturnoPage = (
     .slice(0, 5);
 
   const resumen: (string | number)[][] = [
-    ['REPORTE DE RECARGOS — Salida >19:00 o Entrada <06:00 con más de 10h trabajadas'],
+    ['REPORTE DE RECARGOS — Salida desde las 20:00 o Entrada <05:00 con más de 10h trabajadas'],
     [''],
     ['Fecha de generación:', new Date().toLocaleString('es-CO')],
     ['Total de registros:', eventos.length],
@@ -130,8 +130,8 @@ export const descargarExcelNocturnoPage = (
     [''],
     ['RESUMEN POR TIPO DE RECARGO'],
     ['Tipo', 'Cantidad'],
-    ['🌙 Salida tardía (>19:00)', salidaTardia.length],
-    ['🌅 Entrada temprana (<06:00)', entradaTemprana.length],
+    ['🌙 Salida tardía (≥20:00)', salidaTardia.length],
+    ['🌅 Entrada temprana (<05:00)', entradaTemprana.length],
     ['⚠ Ambas condiciones', ambos.length],
     [''],
     ['DISTRIBUCIÓN POR CAMPAÑA'],
