@@ -3,16 +3,16 @@ import { NextResponse } from 'next/server';
 
 // CONFIGURACIÓN DE DISPOSITIVOS
 const DEVICES = [
-  // { 
-  //   ip: process.env.HIKVISION_IP1 , 
-  //   username: process.env.HIKUSER, 
-  //   password: process.env.HIKPASS,
-  //   port: 443,
-  //   protocol: 'https'
-  // },
-  { 
-    ip: process.env.HIKVISION_IP2, 
-    username: process.env.HIKUSER, 
+  {
+    ip: process.env.HIKVISION_IP1,
+    username: process.env.HIKUSER,
+    password: process.env.HIKPASS,
+    port: 443,
+    protocol: 'https'
+  },
+  {
+    ip: process.env.HIKVISION_IP2,
+    username: process.env.HIKUSER,
     password: process.env.HIKPASS ,
     port: 80,
     protocol: 'http'

@@ -1,51 +1,26 @@
 // app/api/hikvision/users/edit/route.js
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db/usuarios/database';
+import { obtenerOCrearGroupIdPorNombre, obtenerListaDepartamentos } from '@/lib/db/departamentos';
 
 // CONFIGURACIÓN DE DISPOSITIVOS
 const DEVICES = [
-  // { 
-  //   ip: process.env.HIKVISION_IP1, 
-  //   username: process.env.HIKUSER, 
-  //   password: process.env.HIKPASS,
-  //   port: 443,
-  //   protocol: 'https'
-  // },
-  { 
-    ip: process.env.HIKVISION_IP2 , 
-    username: process.env.HIKUSER, 
+  {
+    ip: process.env.HIKVISION_IP1,
+    username: process.env.HIKUSER,
+    password: process.env.HIKPASS,
+    port: 443,
+    protocol: 'https'
+  },
+  {
+    ip: process.env.HIKVISION_IP2 ,
+    username: process.env.HIKUSER,
     password: process.env.HIKPASS,
     port: 80,
     protocol: 'http'
   }
 ].filter(device => device.ip);
 
-// Mapeo de departamentos (según sincronización)
-const DEPARTMENTS = {
-  'TI': 1,
-  'Teams Leaders': 2,
-  'Campana 5757': 3,
-  'Campana SAV': 4,
-  'Campana REFI': 5,
-  'Campana PL': 6,
-  'Campana PARLO': 7,
-  'Administrativo': 8,
-  'No asignado': 8,
-  // Mapeos alternativos
-  'Campaña 5757': 3,
-  'Campaña SAV': 4,
-  'Campaña REFI': 5,
-  'Campaña PL': 6,
-  'Campaña PARLO': 7
-};
-
-function getDepartmentId(departmentName) {
-  if (!departmentName) return 8; // Default: Administrativo
-  
-  // Normalizar "Campaña" a "Campana"
-  const normalized = departmentName.replace('Campaña', 'Campana');
-  return DEPARTMENTS[normalized] || DEPARTMENTS[departmentName] || 8;
-}
 
 // VALIDADOR DE SEGURIDAD
 class SecurityValidator {
@@ -131,9 +106,9 @@ class SecurityValidator {
 }
 
 // FUNCIÓN PARA ACTUALIZAR EN HIKVISION
-async function updateUserInHikvision(device, userData) {
+async function updateUserInHikvision(device, userData, departmentId) {
   console.log(`🔄 Actualizando usuario ${userData.employeeNo} en ${device.protocol}://${device.ip}:${device.port}`);
-  
+
   try {
     const DigestFetch = (await import('digest-fetch')).default;
     const client = new DigestFetch(device.username, device.password, {
@@ -141,9 +116,6 @@ async function updateUserInHikvision(device, userData) {
       algorithm: 'MD5'
     });
 
-    // Obtener department_id
-    const departmentId = getDepartmentId(userData.departamento);
-    
     // Determinar gender
     let gender = 'male';
     if (userData.genero === 'Femenino') gender = 'female';
@@ -248,9 +220,8 @@ async function updateUserInDatabase(userData) {
     
     // Buscar si el usuario ya existe
     const searchQuery = `
-      SELECT id FROM hikvision_users 
-      WHERE employee_no = $1 
-      LIMIT 1
+      SELECT TOP 1 id FROM hikvision_users
+      WHERE employee_no = $1
     `;
     
     const searchResult = await query(searchQuery, [userData.employeeNo]);
@@ -262,16 +233,17 @@ async function updateUserInDatabase(userData) {
       // Crear nuevo usuario - solo con columnas existentes
       const insertQuery = `
         INSERT INTO hikvision_users (
-          employee_no, 
-          nombre, 
-          departamento, 
-          genero, 
+          employee_no,
+          nombre,
+          departamento,
+          genero,
           estado,
           fecha_creacion,
           fecha_modificacion,
           tipo_usuario
-        ) VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), $6)
-        RETURNING *
+        )
+        OUTPUT INSERTED.*
+        VALUES ($1, $2, $3, $4, $5, GETDATE(), GETDATE(), $6)
       `;
       
       queryResult = await query(insertQuery, [
@@ -286,16 +258,16 @@ async function updateUserInDatabase(userData) {
     } else {
       // Actualizar usuario existente - solo columnas existentes
       const updateQuery = `
-        UPDATE hikvision_users 
-        SET 
+        UPDATE hikvision_users
+        SET
           nombre = $1,
           departamento = $2,
           genero = $3,
           estado = $4,
-          fecha_modificacion = NOW(),
+          fecha_modificacion = GETDATE(),
           tipo_usuario = $5
+        OUTPUT INSERTED.*
         WHERE employee_no = $6
-        RETURNING *
       `;
       
       queryResult = await query(updateQuery, [
@@ -401,12 +373,13 @@ export async function PUT(request) {
 
     // 2. Actualizar en dispositivos Hikvision
     console.log('📡 Actualizando en dispositivos Hikvision...');
+    const departmentId = await obtenerOCrearGroupIdPorNombre(userData.departamento);
     const hikvisionResults = [];
     let successCount = 0;
 
     for (const device of DEVICES) {
       console.log(`⚙️ Procesando dispositivo: ${device.protocol}://${device.ip}:${device.port}`);
-      const result = await updateUserInHikvision(device, userData);
+      const result = await updateUserInHikvision(device, userData, departmentId);
       hikvisionResults.push(result);
       
       if (result.success) {
@@ -466,6 +439,7 @@ export async function POST(request) {
 
 // Método GET para información del endpoint
 export async function GET() {
+  const departamentos = await obtenerListaDepartamentos();
   return NextResponse.json({
     success: true,
     message: "Endpoint de edición de usuarios Hikvision",
@@ -476,13 +450,13 @@ export async function GET() {
       rateLimiting: true,
       logging: true
     },
-    devices: DEVICES.map(d => ({ 
-      ip: d.ip, 
-      port: d.port, 
+    devices: DEVICES.map(d => ({
+      ip: d.ip,
+      port: d.port,
       protocol: d.protocol,
       url: `${d.protocol}://${d.ip}:${d.port}`
     })),
-    departments: DEPARTMENTS,
+    departments: departamentos,
     usage: {
       method: "PUT",
       body: {

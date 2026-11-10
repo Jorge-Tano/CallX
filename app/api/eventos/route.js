@@ -1,21 +1,7 @@
-// C:\Users\jorge.gomez\Documents\Proyectos\CallX\app\api\eventos\route.js
+// app/api/eventos/route.js
 
 import { NextResponse } from 'next/server';
-import { Pool } from 'pg';
-
-// Configuración PostgreSQL
-const pgConfig = {
-    user: process.env.DB_USER || 'postgres',
-    host: process.env.DB_HOST || '127.0.0.1',
-    database: process.env.DB_NAME || 'hikvision_events',
-    password: process.env.DB_PASSWORD || 'OnePiece00.',
-    port: parseInt(process.env.DB_PORT || '5432'),
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
-};
-
-const pool = new Pool(pgConfig);
+import { query } from '@/lib/db/usuarios/database';
 
 // Función para calcular estado del empleado
 function calcularEstadoEmpleado(evento) {
@@ -158,14 +144,15 @@ async function handleEventosPageRequest(request) {
         const departamento = url.searchParams.get('departamento');
         const ejecutivo = url.searchParams.get('ejecutivo');
         const maxSearchDays = parseInt(process.env.MAX_SEARCH_DAYS || '90');
-        const minSearchDate = process.env.MIN_SEARCH_DATE || null;
 
-        let query = `
-            SELECT id, documento, nombre, fecha, 
-                   hora_entrada, hora_salida, 
-                   hora_salida_almuerzo, hora_entrada_almuerzo,
+        let queryText = `
+            SELECT id, documento, nombre, fecha,
+                   CONVERT(VARCHAR(8), hora_entrada, 108) AS hora_entrada,
+                   CONVERT(VARCHAR(8), hora_salida, 108) AS hora_salida,
+                   CONVERT(VARCHAR(8), hora_salida_almuerzo, 108) AS hora_salida_almuerzo,
+                   CONVERT(VARCHAR(8), hora_entrada_almuerzo, 108) AS hora_entrada_almuerzo,
                    dispositivo_ip, campaña, imagen
-            FROM attendance_events 
+            FROM attendance_events
             WHERE 1=1
         `;
 
@@ -173,16 +160,16 @@ async function handleEventosPageRequest(request) {
         let paramIndex = 1;
 
         if (rango === 'hoy') {
-            query += ` AND fecha = CURRENT_DATE`;
+            queryText += ` AND fecha = CAST(GETDATE() AS DATE)`;
         } else if (rango === '7dias') {
-            query += ` AND fecha >= CURRENT_DATE - INTERVAL '6 days'`;
+            queryText += ` AND fecha >= DATEADD(day, -6, CAST(GETDATE() AS DATE))`;
         } else if (rango === '30dias') {
-            query += ` AND fecha >= CURRENT_DATE - INTERVAL '29 days'`;
+            queryText += ` AND fecha >= DATEADD(day, -29, CAST(GETDATE() AS DATE))`;
         } else if (rango === 'personalizado' && fechaInicio && fechaFin) {
             // Validar rango de fechas
             const fechaInicioDate = new Date(fechaInicio);
             const fechaFinDate = new Date(fechaFin);
-            
+
             if (isNaN(fechaInicioDate.getTime()) || isNaN(fechaFinDate.getTime())) {
                 return NextResponse.json({
                     success: false,
@@ -191,7 +178,7 @@ async function handleEventosPageRequest(request) {
                     estadisticas: { porCampaña: {}, ejecutivos: [] }
                 }, { status: 400 });
             }
-            
+
             if (fechaInicioDate > fechaFinDate) {
                 return NextResponse.json({
                     success: false,
@@ -200,11 +187,11 @@ async function handleEventosPageRequest(request) {
                     estadisticas: { porCampaña: {}, ejecutivos: [] }
                 }, { status: 400 });
             }
-            
+
             // Validar máximo de días permitidos
             const diffTime = Math.abs(fechaFinDate - fechaInicioDate);
             const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-            
+
             if (diffDays > maxSearchDays) {
                 return NextResponse.json({
                     success: false,
@@ -214,7 +201,7 @@ async function handleEventosPageRequest(request) {
                 }, { status: 400 });
             }
 
-            query += ` AND fecha BETWEEN $${paramIndex} AND $${paramIndex + 1}`;
+            queryText += ` AND fecha BETWEEN $${paramIndex} AND $${paramIndex + 1}`;
             params.push(fechaInicio, fechaFin);
             paramIndex += 2;
         }
@@ -224,32 +211,32 @@ async function handleEventosPageRequest(request) {
             if (departamento === 'Todos' || departamento === 'todos') {
                 // No aplicar filtro de departamento
             } else {
-                query += ` AND campaña ILIKE $${paramIndex}`;
-                params.push(`%${departamento}%`);
+                queryText += ` AND campaña = $${paramIndex}`;
+                params.push(departamento);
                 paramIndex++;
             }
         }
 
         if (ejecutivo) {
-            query += ` AND nombre ILIKE $${paramIndex}`;
+            queryText += ` AND nombre LIKE $${paramIndex}`;
             params.push(`%${ejecutivo}%`);
             paramIndex++;
         }
 
-        query += ` ORDER BY fecha DESC, documento`;
-        const result = await pool.query(query, params);
+        queryText += ` ORDER BY fecha DESC, documento`;
+        const result = await query(queryText, params);
         const registros = result.rows;
         const eventosFormateados = formatearEventosParaFrontend(registros);
         const estadisticas = calcularEstadisticasEventos(eventosFormateados);
 
         // Obtener lista única de campañas disponibles para filtros
         const campañasQuery = `
-            SELECT DISTINCT campaña 
-            FROM attendance_events 
+            SELECT DISTINCT campaña
+            FROM attendance_events
             WHERE campaña IS NOT NULL AND campaña != ''
             ORDER BY campaña
         `;
-        const campañasResult = await pool.query(campañasQuery);
+        const campañasResult = await query(campañasQuery);
         const campañasDisponibles = campañasResult.rows.map(row => row.campaña);
 
         return NextResponse.json({
@@ -276,32 +263,32 @@ async function handleDebugRequest(request) {
     try {
         const url = new URL(request.url);
         const fecha = url.searchParams.get('fecha');
-        
-        const query = `
-            SELECT 
-                documento, 
-                nombre, 
+
+        const queryText = `
+            SELECT
+                documento,
+                nombre,
                 fecha,
-                hora_entrada, 
-                hora_salida, 
-                hora_salida_almuerzo, 
-                hora_entrada_almuerzo,
-                campaña,  -- Incluir campaña en el resultado
+                CONVERT(VARCHAR(8), hora_entrada, 108) AS hora_entrada,
+                CONVERT(VARCHAR(8), hora_salida, 108) AS hora_salida,
+                CONVERT(VARCHAR(8), hora_salida_almuerzo, 108) AS hora_salida_almuerzo,
+                CONVERT(VARCHAR(8), hora_entrada_almuerzo, 108) AS hora_entrada_almuerzo,
+                campaña,
                 COUNT(*) as total,
                 SUM(CASE WHEN hora_entrada IS NOT NULL THEN 1 ELSE 0 END) as con_entrada,
                 SUM(CASE WHEN hora_salida IS NOT NULL THEN 1 ELSE 0 END) as con_salida,
                 SUM(CASE WHEN hora_salida_almuerzo IS NOT NULL THEN 1 ELSE 0 END) as con_salida_almuerzo,
                 SUM(CASE WHEN hora_entrada_almuerzo IS NOT NULL THEN 1 ELSE 0 END) as con_entrada_almuerzo
-            FROM attendance_events 
+            FROM attendance_events
             WHERE fecha = $1
             GROUP BY documento, nombre, fecha, campaña,
-                     hora_entrada, hora_salida, 
+                     hora_entrada, hora_salida,
                      hora_salida_almuerzo, hora_entrada_almuerzo
             ORDER BY documento;
         `;
-        
-        const result = await pool.query(query, [fecha]);
-        
+
+        const result = await query(queryText, [fecha]);
+
         return NextResponse.json({
             success: true,
             fecha: fecha,
@@ -316,7 +303,7 @@ async function handleDebugRequest(request) {
                 campañasUnicas: [...new Set(result.rows.map(r => r.campaña).filter(Boolean))]
             }
         });
-        
+
     } catch (error) {
         return NextResponse.json({
             success: false,
@@ -332,13 +319,13 @@ async function handleStatsRequest(request) {
         const action = url.searchParams.get('action') || 'stats';
         const limit = parseInt(url.searchParams.get('limit') || '10');
 
-        let query = '';
+        let queryText = '';
         let params = [];
 
         switch (action) {
             case 'stats':
-                query = `
-                    SELECT 
+                queryText = `
+                    SELECT
                         COUNT(*) as total_registros,
                         COUNT(DISTINCT documento) as personas_unicas,
                         MIN(fecha) as primer_registro,
@@ -346,46 +333,48 @@ async function handleStatsRequest(request) {
                         COUNT(CASE WHEN dispositivo_ip = 'multiple' THEN 1 END) as registros_multidispositivo,
                         COUNT(DISTINCT campaña) as campañas_unicas
                     FROM attendance_events
-                    WHERE fecha >= CURRENT_DATE - INTERVAL '7 days';
+                    WHERE fecha >= DATEADD(day, -7, CAST(GETDATE() AS DATE));
                 `;
                 break;
 
             case 'today':
-                query = `
-                    SELECT 
+                queryText = `
+                    SELECT
                         documento, nombre,
-                        hora_entrada, hora_salida,
-                        hora_salida_almuerzo, hora_entrada_almuerzo,
+                        CONVERT(VARCHAR(8), hora_entrada, 108) AS hora_entrada,
+                        CONVERT(VARCHAR(8), hora_salida, 108) AS hora_salida,
+                        CONVERT(VARCHAR(8), hora_salida_almuerzo, 108) AS hora_salida_almuerzo,
+                        CONVERT(VARCHAR(8), hora_entrada_almuerzo, 108) AS hora_entrada_almuerzo,
                         dispositivo_ip,
-                        campaña  -- Incluir campaña
-                    FROM attendance_events 
-                    WHERE fecha = CURRENT_DATE
+                        campaña
+                    FROM attendance_events
+                    WHERE fecha = CAST(GETDATE() AS DATE)
                     ORDER BY documento;
                 `;
                 break;
 
             case 'recent':
-                query = `
-                    SELECT documento, nombre, fecha, 
-                           hora_entrada, hora_salida, 
-                           dispositivo_ip, campaña  -- Incluir campaña
-                    FROM attendance_events 
-                    ORDER BY fecha DESC, documento
-                    LIMIT $1;
+                queryText = `
+                    SELECT TOP ($1) documento, nombre, fecha,
+                           CONVERT(VARCHAR(8), hora_entrada, 108) AS hora_entrada,
+                           CONVERT(VARCHAR(8), hora_salida, 108) AS hora_salida,
+                           dispositivo_ip, campaña
+                    FROM attendance_events
+                    ORDER BY fecha DESC, documento;
                 `;
                 params = [limit];
                 break;
 
             case 'campañas':
                 // Obtener estadísticas por campaña
-                query = `
-                    SELECT 
+                queryText = `
+                    SELECT
                         campaña,
                         COUNT(*) as total_registros,
                         COUNT(DISTINCT documento) as empleados_unicos,
                         MIN(fecha) as primera_fecha,
                         MAX(fecha) as ultima_fecha
-                    FROM attendance_events 
+                    FROM attendance_events
                     WHERE campaña IS NOT NULL AND campaña != ''
                     GROUP BY campaña
                     ORDER BY total_registros DESC;
@@ -393,10 +382,10 @@ async function handleStatsRequest(request) {
                 break;
 
             default:
-                query = 'SELECT 1 as test;';
+                queryText = 'SELECT 1 as test;';
         }
 
-        const result = await pool.query(query, params);
+        const result = await query(queryText, params);
 
         return NextResponse.json({
             success: true,
@@ -417,12 +406,12 @@ async function handleStatsRequest(request) {
 export async function GET(request) {
     try {
         const url = new URL(request.url);
-        
+
         // Endpoint para la página principal de eventos
         if (url.searchParams.get('rango')) {
             return await handleEventosPageRequest(request);
         }
-        
+
         // Endpoint para debug
         if (url.searchParams.get('debug') === 'true') {
             return await handleDebugRequest(request);
@@ -443,7 +432,7 @@ export async function GET(request) {
 export async function POST(request) {
     try {
         const body = await request.json();
-        
+
         // Si necesitas algún procesamiento específico POST, lo puedes agregar aquí
         return NextResponse.json({
             success: true,

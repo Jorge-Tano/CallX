@@ -240,7 +240,7 @@ export default function Faltas({
   }, [estadisticas]);
 
   const recomendaciones = useMemo(() => {
-    const recs = [];
+    const recs: any[] = [];
     if (!estadisticasFiltradas.porGravedad) return recs;
     
     if (estadisticasFiltradas.porGravedad.ALTA > 0) {

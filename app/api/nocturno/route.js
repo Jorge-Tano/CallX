@@ -1,20 +1,7 @@
 // app/api/nocturno/route.js
 
 import { NextResponse } from 'next/server';
-import { Pool } from 'pg';
-
-const pgConfig = {
-  user: process.env.DB_USER || 'postgres',
-  host: process.env.DB_HOST || '127.0.0.1',
-  database: process.env.DB_NAME || 'hikvision_events',
-  password: process.env.DB_PASSWORD || 'OnePiece00.',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-};
-
-const pool = new Pool(pgConfig);
+import { query } from '@/lib/db/usuarios/database';
 
 function horaAMinutos(hora) {
   if (!hora) return null;
@@ -129,17 +116,19 @@ export async function GET(request) {
     // Registros con entrada Y salida, que cumplan AL MENOS UNA condición:
     // - salida después de las 19:00
     // - entrada antes de las 06:00
-    let query = `
+    let queryText = `
       SELECT id, documento, nombre, fecha,
-             hora_entrada, hora_salida,
-             hora_salida_almuerzo, hora_entrada_almuerzo,
+             CONVERT(VARCHAR(8), hora_entrada, 108) AS hora_entrada,
+             CONVERT(VARCHAR(8), hora_salida, 108) AS hora_salida,
+             CONVERT(VARCHAR(8), hora_salida_almuerzo, 108) AS hora_salida_almuerzo,
+             CONVERT(VARCHAR(8), hora_entrada_almuerzo, 108) AS hora_entrada_almuerzo,
              dispositivo_ip, campaña
       FROM attendance_events
       WHERE hora_entrada IS NOT NULL
         AND hora_salida IS NOT NULL
         AND (
-          hora_salida::time >= '20:00:00'
-          OR hora_entrada::time < '05:00:00'
+          hora_salida >= '20:00:00'
+          OR hora_entrada < '05:00:00'
         )
     `;
 
@@ -147,11 +136,11 @@ export async function GET(request) {
     let paramIndex = 1;
 
     if (rango === 'hoy') {
-      query += ` AND fecha = CURRENT_DATE`;
+      queryText += ` AND fecha = CAST(GETDATE() AS DATE)`;
     } else if (rango === '7dias') {
-      query += ` AND fecha >= CURRENT_DATE - INTERVAL '6 days'`;
+      queryText += ` AND fecha >= DATEADD(day, -6, CAST(GETDATE() AS DATE))`;
     } else if (rango === '30dias') {
-      query += ` AND fecha >= CURRENT_DATE - INTERVAL '29 days'`;
+      queryText += ` AND fecha >= DATEADD(day, -29, CAST(GETDATE() AS DATE))`;
     } else if (rango === 'personalizado' && fechaInicio && fechaFin) {
       const fechaInicioDate = new Date(fechaInicio);
       const fechaFinDate = new Date(fechaFin);
@@ -161,26 +150,26 @@ export async function GET(request) {
       if (fechaInicioDate > fechaFinDate) {
         return NextResponse.json({ success: false, error: 'La fecha de inicio no puede ser posterior a la fecha fin', eventos: [] }, { status: 400 });
       }
-      query += ` AND fecha BETWEEN $${paramIndex} AND $${paramIndex + 1}`;
+      queryText += ` AND fecha BETWEEN $${paramIndex} AND $${paramIndex + 1}`;
       params.push(fechaInicio, fechaFin);
       paramIndex += 2;
     }
 
     if (departamento && departamento !== 'Todos' && departamento !== 'todos') {
-      query += ` AND campaña ILIKE $${paramIndex}`;
-      params.push(`%${departamento}%`);
+      queryText += ` AND campaña = $${paramIndex}`;
+      params.push(departamento);
       paramIndex++;
     }
 
     if (ejecutivo) {
-      query += ` AND nombre ILIKE $${paramIndex}`;
+      queryText += ` AND nombre LIKE $${paramIndex}`;
       params.push(`%${ejecutivo}%`);
       paramIndex++;
     }
 
-    query += ` ORDER BY fecha DESC, hora_salida DESC`;
+    queryText += ` ORDER BY fecha DESC, hora_salida DESC`;
 
-    const result = await pool.query(query, params);
+    const result = await query(queryText, params);
     let eventosFormateados = formatearEventosNocturno(result.rows);
 
     // Filtrar: solo los que tienen más de N horas trabajadas
@@ -216,7 +205,7 @@ export async function GET(request) {
     const totalEntradaTemprana = eventosFormateados.filter(e => e.esEntradaTemprana).length;
     const totalAmbos = eventosFormateados.filter(e => e.tipoRecargo === 'ambos').length;
 
-    const campañasResult = await pool.query(
+    const campañasResult = await query(
       `SELECT DISTINCT campaña FROM attendance_events WHERE campaña IS NOT NULL AND campaña != '' ORDER BY campaña`
     );
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { pool } from '@/lib/db';
+import { query as dbQuery } from '@/lib/db/usuarios/database';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 
@@ -115,7 +115,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const deptCheckResult = await pool.query(
+    const deptCheckResult = await dbQuery(
       `SELECT DISTINCT departamento FROM hikvision_users WHERE departamento IS NOT NULL ORDER BY departamento`
     );
     const existingDepartments = deptCheckResult.rows.map(r => r.departamento);
@@ -147,13 +147,13 @@ export async function GET(request: NextRequest) {
       const departmentsToUse = validDepartments.length > 0 ? validDepartments : userDepartments;
 
       if (departmentsToUse.length === 1) {
-        query += ` AND departamento ILIKE $${paramIndex}`;
+        query += ` AND departamento = $${paramIndex}`;
         queryParams.push(departmentsToUse[0]);
         paramIndex++;
       } else {
         const conditions = departmentsToUse.map((dept, idx) => {
           queryParams.push(dept);
-          return `departamento ILIKE $${paramIndex + idx}`;
+          return `departamento = $${paramIndex + idx}`;
         });
         query += ` AND (${conditions.join(' OR ')})`;
         paramIndex += departmentsToUse.length;
@@ -170,10 +170,10 @@ export async function GET(request: NextRequest) {
       query += ` ORDER BY LOWER(departamento) ASC, fecha_creacion DESC, id ASC`;
     }
 
-    query += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    query += ` OFFSET $${paramIndex + 1} ROWS FETCH NEXT $${paramIndex} ROWS ONLY`;
     queryParams.push(limit, offset);
 
-    const result = await pool.query(query, queryParams);
+    const result = await dbQuery(query, queryParams);
 
     const usuariosFormateados = result.rows.map(usuario => {
       let campanaCode = null;
@@ -205,18 +205,18 @@ export async function GET(request: NextRequest) {
         : userDepartments;
 
       if (departmentsToUse.length === 1) {
-        countQuery += ` AND departamento ILIKE $1`;
+        countQuery += ` AND departamento = $1`;
         countParams.push(departmentsToUse[0]);
       } else if (departmentsToUse.length > 1) {
         const conditions = departmentsToUse.map((dept, idx) => {
           countParams.push(dept);
-          return `departamento ILIKE $${idx + 1}`;
+          return `departamento = $${idx + 1}`;
         });
         countQuery += ` AND (${conditions.join(' OR ')})`;
       }
     }
 
-    const countResult = await pool.query(countQuery, countParams);
+    const countResult = await dbQuery(countQuery, countParams);
     const total = parseInt(countResult.rows[0].total);
 
     return NextResponse.json({
@@ -274,28 +274,23 @@ export async function POST(request: NextRequest) {
 
     const deptNormalizado = departamento || 'No asignado';
 
-    await pool.query(
-      `INSERT INTO hikvision_users (
-        employee_no,
-        nombre,
-        departamento,
-        genero,
-        tipo_usuario,
-        estado,
-        device_ip,
-        foto_path,
-        fecha_creacion,
-        fecha_modificacion
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
-      ON CONFLICT (employee_no) DO UPDATE SET
-        nombre             = EXCLUDED.nombre,
-        departamento       = EXCLUDED.departamento,
-        genero             = EXCLUDED.genero,
-        tipo_usuario       = EXCLUDED.tipo_usuario,
-        estado             = EXCLUDED.estado,
-        device_ip          = EXCLUDED.device_ip,
-        foto_path          = EXCLUDED.foto_path,
-        fecha_modificacion = NOW()`,
+    await dbQuery(
+      `MERGE hikvision_users AS target
+      USING (SELECT $1 AS employee_no) AS source
+      ON target.employee_no = source.employee_no
+      WHEN MATCHED THEN
+        UPDATE SET
+          nombre             = $2,
+          departamento       = $3,
+          genero             = $4,
+          tipo_usuario       = $5,
+          estado             = $6,
+          device_ip          = $7,
+          foto_path          = $8,
+          fecha_modificacion = GETDATE()
+      WHEN NOT MATCHED THEN
+        INSERT (employee_no, nombre, departamento, genero, tipo_usuario, estado, device_ip, foto_path, fecha_creacion, fecha_modificacion)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, GETDATE(), GETDATE());`,
       [
         empNo,
         nombre.trim(),
@@ -314,18 +309,6 @@ export async function POST(request: NextRequest) {
 
   } catch (error: any) {
     console.error('❌ Error insertando usuario en BD:', error.message);
-
-    // El ON CONFLICT requiere UNIQUE en employee_no — si falla con este código
-    // es porque falta el constraint. Mensaje claro para identificarlo rápido.
-    if (error.code === '42P10' || error.message?.includes('ON CONFLICT')) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'Falta constraint UNIQUE en employee_no. Ejecuta: ALTER TABLE hikvision_users ADD CONSTRAINT hikvision_users_employee_no_unique UNIQUE (employee_no);'
-        },
-        { status: 500 }
-      );
-    }
 
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }

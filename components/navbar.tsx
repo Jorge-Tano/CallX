@@ -288,6 +288,15 @@ export default function Navbar() {
                 <span className="font-medium">Nocturnos</span>
               </Link>
             </div>
+
+            {(userInfo?.role === 'TI' || userInfo?.role === 'Administrador' || (session?.user as any)?.role === 'TI' || (session?.user as any)?.role === 'Administrador') && (
+              <div className="h-full flex items-center hover:bg-green-50 hover:text-green-700 transition rounded-lg px-4">
+                <Link href="/departamentos" className="flex items-center gap-2">
+                  <i className="bi bi-diagram-3-fill"></i>
+                  <span className="font-medium">Departamentos</span>
+                </Link>
+              </div>
+            )}
           </div>
         )}
       </div>

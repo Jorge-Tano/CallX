@@ -1,35 +1,56 @@
 // app/api/hikvision/users/create/route.js
 import { NextResponse } from 'next/server';
 import DigestFetch from 'digest-fetch';
+import { query } from '@/lib/db/usuarios/database';
+import { obtenerOCrearGroupIdPorNombre } from '@/lib/db/departamentos';
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 const DEVICES = [
-  // {
-  //   ip: process.env.HIKVISION_IP1,
-  //   username: process.env.HIKUSER,
-  //   password: process.env.HIKPASS
-  // },
+  {
+    ip: process.env.HIKVISION_IP1,
+    username: process.env.HIKUSER,
+    password: process.env.HIKPASS
+  },
   {
     ip: process.env.HIKVISION_IP2,
     username: process.env.HIKUSER,
     password: process.env.HIKPASS
   }
-];
+].filter(device => device.ip);
 
-const DEPARTMENTS = {
-  'TI': 1,
-  'Teams Leaders': 2,
-  'Campana 5757': 3,
-  'Campana SAV': 4,
-  'Campana REFI': 5,
-  'Campana PL': 6,
-  'Campana PARLO': 7,
-  'Administrativo': 8
-};
+// Guarda el usuario recién creado directamente en la base de datos.
+// No dependemos de una llamada HTTP a nuestro propio servidor porque el puerto
+// real (3005 en dev, 3001 en start) no coincide con el localhost:3000 asumido antes,
+// lo que hacía que el insert nunca se ejecutara.
+async function insertUserInDatabase(user) {
+  const genero = user.genero === 'Femenino' ? 'Femenino' : (user.genero === 'Masculino' ? 'Masculino' : 'No especificado');
 
-function getDepartmentId(departmentName) {
-  return DEPARTMENTS[departmentName] || null;
+  const upsertQuery = `
+    MERGE hikvision_users AS target
+    USING (SELECT $1 AS employee_no) AS source
+    ON target.employee_no = source.employee_no
+    WHEN MATCHED THEN
+      UPDATE SET
+        nombre             = $2,
+        departamento       = $3,
+        genero             = $4,
+        tipo_usuario       = $5,
+        estado             = $6,
+        fecha_modificacion = GETDATE()
+    WHEN NOT MATCHED THEN
+      INSERT (employee_no, nombre, departamento, genero, tipo_usuario, estado, fecha_creacion, fecha_modificacion)
+      VALUES ($1, $2, $3, $4, $5, $6, GETDATE(), GETDATE());
+  `;
+
+  await query(upsertQuery, [
+    user.numeroEmpleado.toString(),
+    user.nombre,
+    user.departamento,
+    genero,
+    'Normal',
+    'Activo'
+  ]);
 }
 
 // Función para crear un usuario en un dispositivo
@@ -144,15 +165,13 @@ export async function POST(request) {
         continue;
       }
 
-      const departmentId = getDepartmentId(user.departamento);
-      if (!departmentId) {
-        validationErrors.push(`Usuario ${i + 1}: Departamento "${user.departamento}" no válido`);
-        continue;
-      }
-
       validatedUsers.push({
         ...user,
-        departmentId,
+        // Busca el grupo por nombre en la tabla de departamentos; si el nombre
+        // es nuevo, se crea ahí mismo con un groupId propio (los dispositivos
+        // no distinguen entre grupos por permisos, todos comparten el mismo
+        // horario/puerta, así que crear uno nuevo es seguro).
+        departmentId: await obtenerOCrearGroupIdPorNombre(user.departamento),
         index: i + 1
       });
     }
@@ -206,9 +225,18 @@ export async function POST(request) {
       }
 
       userResults.success = deviceSuccessCount === DEVICES.length;
-      
+
       if (userResults.success) {
         summary.successfulUsers++;
+
+        try {
+          await insertUserInDatabase(user);
+          userResults.savedToDatabase = true;
+        } catch (dbError) {
+          console.error(`💥 Error guardando usuario ${user.numeroEmpleado} en la base de datos:`, dbError);
+          userResults.savedToDatabase = false;
+          userResults.databaseError = dbError.message;
+        }
       } else {
         summary.failedUsers++;
       }
@@ -216,24 +244,11 @@ export async function POST(request) {
       results.push(userResults);
     }
 
-    // Sincronizar con la base de datos
-    let syncResult = null;
-    try {
-      const syncResponse = await fetch('http://localhost:3000/api/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      syncResult = await syncResponse.json();
-    } catch (syncError) {
-      console.warn('⚠️ Error en sincronización:', syncError);
-    }
-
     const finalResult = {
       success: summary.failedUsers === 0,
       summary,
       results,
-      syncResult,
-      message: summary.failedUsers === 0 
+      message: summary.failedUsers === 0
         ? `✅ ${summary.successfulUsers} usuario(s) creado(s) exitosamente en todos los dispositivos`
         : `⚠️ ${summary.successfulUsers} exitoso(s), ${summary.failedUsers} fallido(s)`
     };

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import DigestFetch from 'digest-fetch';
 import { syncUsersFromHikvision, createSyncLog } from '@/lib/db/usuarios/sync-utils/route';
+import { obtenerMapaDepartamentos, registrarGroupIdSiNoExiste } from '@/lib/db/departamentos';
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
@@ -8,22 +9,14 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 const CONFIG = {
   username: process.env.HIKUSER,
   password: process.env.HIKPASS,
-  deviceIp: process.env.HIKVISION_IP2,
+  // Los dos dispositivos deben ser espejo entre sí; se consultan ambos y se
+  // combinan para que la app muestre a todos aunque alguien haya sido dado de
+  // alta manualmente en uno solo de los dos.
+  deviceIps: [process.env.HIKVISION_IP1, process.env.HIKVISION_IP2].filter(Boolean),
   batchSize: 30,
   maxBatches: 15,
   authRetries: 3,
   delayBetweenBatches: 100
-};
-
-const DEPARTAMENTOS = {
-  1: "TI",
-  2: "Teams Leaders",
-  3: "Campana 5757",
-  4: "Campana SAV",
-  5: "Campana REFI",
-  6: "Campana PL",
-  7: "Campana PARLO",
-  8: "Administrativo"
 };
 
 // Cliente Hikvision (copiado de tu código existente)
@@ -112,7 +105,7 @@ class HikvisionClient {
 }
 
 // Función para procesar datos de usuario
-function processUserData(user, deviceIp, index, total) {
+function processUserData(user, deviceIp, index, total, departamentosMap) {
   try {
     if (!user?.employeeNo) return null;
 
@@ -130,7 +123,7 @@ function processUserData(user, deviceIp, index, total) {
       : null;
 
     const grupoId = user.groupId || user.deptID;
-    const departamento = DEPARTAMENTOS[grupoId] || (grupoId ? `Grupo ${grupoId}` : "No asignado");
+    const departamento = departamentosMap[grupoId] || (grupoId ? `Grupo ${grupoId}` : "No asignado");
 
     let genero = "No especificado";
     if (user.gender === 1 || user.gender === 'male') genero = 'Masculino';
@@ -169,6 +162,55 @@ function processUserData(user, deviceIp, index, total) {
   }
 }
 
+// Consulta todos los dispositivos configurados (IP1 e IP2) y combina los usuarios.
+// Si el mismo employeeNo existe en ambos, se conserva la versión del último
+// dispositivo consultado (deberían ser espejo, así que en teoría coinciden).
+async function fetchAllDevicesUsers() {
+  const departamentosMap = await obtenerMapaDepartamentos();
+  const combined = [];
+  const deviceResults = [];
+
+  for (const deviceIp of CONFIG.deviceIps) {
+    try {
+      const client = new HikvisionClient(deviceIp);
+      const result = await client.getAllUsers();
+
+      // Registrar en la tabla de departamentos cualquier groupId que el
+      // dispositivo reporte y que todavía no tenga nombre asignado, para que
+      // un admin pueda ponerle nombre después desde la app.
+      const gruposVistos = new Set(
+        result.users.map(u => u.groupId || u.deptID).filter(Boolean)
+      );
+      for (const grupoId of gruposVistos) {
+        if (!departamentosMap[grupoId]) {
+          await registrarGroupIdSiNoExiste(grupoId);
+          departamentosMap[grupoId] = `Grupo ${grupoId}`;
+        }
+      }
+
+      const processed = result.users
+        .map((user, index) => processUserData(user, result.deviceIp, index, result.totalUsers, departamentosMap))
+        .filter(user => user !== null);
+
+      console.log(`✅ ${processed.length} usuarios obtenidos de ${deviceIp}`);
+      combined.push(...processed);
+      deviceResults.push({ deviceIp, success: true, totalUsers: processed.length });
+    } catch (error) {
+      console.error(`❌ Error consultando ${deviceIp}:`, error.message);
+      deviceResults.push({ deviceIp, success: false, error: error.message });
+    }
+  }
+
+  // Deduplicar por employeeNo conservando la última ocurrencia
+  const porEmployeeNo = new Map();
+  combined.forEach(user => porEmployeeNo.set(user.employeeNo, user));
+
+  return {
+    processedUsers: Array.from(porEmployeeNo.values()),
+    deviceResults
+  };
+}
+
 // 🌟 ENDPOINT GET PRINCIPAL: Consulta Hikvision + Sincroniza automáticamente
 export async function GET(request) {
   const startTime = Date.now();
@@ -183,18 +225,16 @@ export async function GET(request) {
     const page = parseInt(searchParams.get('page') || '1');
 
     let processedUsers = [];
-    
+
+    let deviceResults = [];
+
     if (mode !== 'bd-only') {
-      console.log(`📥 Consultando Hikvision (${CONFIG.deviceIp})...`);
-      const client = new HikvisionClient(CONFIG.deviceIp);
-      const result = await client.getAllUsers();
+      console.log(`📥 Consultando Hikvision (${CONFIG.deviceIps.join(', ')})...`);
+      const combinedResult = await fetchAllDevicesUsers();
+      processedUsers = combinedResult.processedUsers;
+      deviceResults = combinedResult.deviceResults;
 
-      // Procesar usuarios
-      processedUsers = result.users
-        .map((user, index) => processUserData(user, result.deviceIp, index, result.totalUsers))
-        .filter(user => user !== null);
-
-      console.log(`✅ ${processedUsers.length} usuarios obtenidos de Hikvision`);
+      console.log(`✅ ${processedUsers.length} usuarios combinados de ${CONFIG.deviceIps.length} dispositivo(s)`);
     }
 
     // Sincronizar con BD (excepto en modo bd-only)
@@ -210,10 +250,11 @@ export async function GET(request) {
       
       // Crear log de sincronización
       try {
+        const successfulDevices = deviceResults.filter(d => d.success).length;
         logId = await createSyncLog({
-          totalDevices: 1,
-          successfulDevices: 1,
-          devicesWithErrors: 0,
+          totalDevices: deviceResults.length,
+          successfulDevices,
+          devicesWithErrors: deviceResults.length - successfulDevices,
           totalUsers: processedUsers.length,
           newUsers: syncResult.created,
           updatedUsers: syncResult.updated,
@@ -296,30 +337,25 @@ export async function POST(request) {
   try {
     const startTime = Date.now();
     
-    // 1. Consultar Hikvision
-    console.log(`📥 Consultando Hikvision (${CONFIG.deviceIp})...`);
-    const client = new HikvisionClient(CONFIG.deviceIp);
-    const result = await client.getAllUsers();
+    // 1. Consultar todos los dispositivos Hikvision
+    console.log(`📥 Consultando Hikvision (${CONFIG.deviceIps.join(', ')})...`);
+    const { processedUsers, deviceResults } = await fetchAllDevicesUsers();
 
-    // 2. Procesar usuarios
-    const processedUsers = result.users
-      .map((user, index) => processUserData(user, result.deviceIp, index, result.totalUsers))
-      .filter(user => user !== null);
+    console.log(`✅ ${processedUsers.length} usuarios combinados de ${CONFIG.deviceIps.length} dispositivo(s)`);
 
-    console.log(`✅ ${processedUsers.length} usuarios obtenidos de Hikvision`);
-
-    // 3. Sincronizar con PostgreSQL
+    // 2. Sincronizar con PostgreSQL
     console.log(`🔄 Sincronizando manualmente con base de datos...`);
     const syncStart = Date.now();
-    
+
     const syncResult = await syncUsersFromHikvision(processedUsers);
     const syncDuration = Date.now() - syncStart;
-    
-    // 4. Crear log
+
+    // 3. Crear log
+    const successfulDevices = deviceResults.filter(d => d.success).length;
     const logId = await createSyncLog({
-      totalDevices: 1,
-      successfulDevices: 1,
-      devicesWithErrors: 0,
+      totalDevices: deviceResults.length,
+      successfulDevices,
+      devicesWithErrors: deviceResults.length - successfulDevices,
       totalUsers: processedUsers.length,
       newUsers: syncResult.created,
       updatedUsers: syncResult.updated,

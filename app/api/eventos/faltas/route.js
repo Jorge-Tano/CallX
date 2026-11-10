@@ -1,13 +1,5 @@
 import { NextResponse } from 'next/server';
-import { Client } from 'pg';
-
-const DB_CONFIG = {
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT ? parseInt(process.env.DB_PORT) : undefined,
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD
-};
+import { query } from '@/lib/db/usuarios/database';
 
 const CAMPANA_SIN_ALMUERZO = 'Campaña PARLO';
 
@@ -28,7 +20,7 @@ const analizarAlmuerzo = (horaSalidaAlmuerzo, horaEntradaAlmuerzo, campana) => {
       tieneProblema: true
     };
   }
-  
+
   if (horaSalidaAlmuerzo && horaEntradaAlmuerzo) {
     try {
       const [h1, m1] = horaSalidaAlmuerzo.split(':').map(Number);
@@ -36,7 +28,7 @@ const analizarAlmuerzo = (horaSalidaAlmuerzo, horaEntradaAlmuerzo, campana) => {
       const minutosSalida = h1 * 60 + m1;
       const minutosEntrada = h2 * 60 + m2;
       const duracion = minutosEntrada - minutosSalida;
-      
+
       if (duracion < 30) {
         return {
           estado: 'CURTO',
@@ -67,7 +59,7 @@ const analizarAlmuerzo = (horaSalidaAlmuerzo, horaEntradaAlmuerzo, campana) => {
       };
     }
   }
-  
+
   if (horaSalidaAlmuerzo && !horaEntradaAlmuerzo) {
     return {
       estado: 'INCOMPLETO',
@@ -75,7 +67,7 @@ const analizarAlmuerzo = (horaSalidaAlmuerzo, horaEntradaAlmuerzo, campana) => {
       tieneProblema: true
     };
   }
-  
+
   if (!horaSalidaAlmuerzo && horaEntradaAlmuerzo) {
     return {
       estado: 'INCOMPLETO',
@@ -83,7 +75,7 @@ const analizarAlmuerzo = (horaSalidaAlmuerzo, horaEntradaAlmuerzo, campana) => {
       tieneProblema: true
     };
   }
-  
+
   return {
     estado: 'DESCONOCIDO',
     mensaje: 'Estado desconocido',
@@ -97,7 +89,7 @@ const determinarEstadoAsistencia = (registro, campana) => {
   const tieneSalidaAlmuerzo = !!registro.hora_salida_almuerzo;
   const tieneEntradaAlmuerzo = !!registro.hora_entrada_almuerzo;
   const esParlo = campana === CAMPANA_SIN_ALMUERZO;
-  
+
   // Jornada completa
   if (esParlo) {
     // Para PARLO: completo si tiene entrada y salida (almuerzo no importa)
@@ -107,20 +99,20 @@ const determinarEstadoAsistencia = (registro, campana) => {
       return 'COMPLETO';
     }
   }
-  
+
   // Problemas de entrada/salida
   if (!tieneEntrada && tieneSalida) return 'SALIDA_SIN_ENTRADA';
   if (tieneEntrada && !tieneSalida) return 'ENTRADA_SIN_SALIDA';
   if (!tieneEntrada && !tieneSalida && (tieneSalidaAlmuerzo || tieneEntradaAlmuerzo)) return 'SOLO_ALMUERZO';
   if (!tieneEntrada && !tieneSalida && !tieneSalidaAlmuerzo && !tieneEntradaAlmuerzo) return 'SIN_MARCAS';
-  
+
   // Problemas de almuerzo (solo para no-PARLO)
   if (!esParlo) {
     if (tieneEntrada && tieneSalida && !tieneSalidaAlmuerzo && !tieneEntradaAlmuerzo) return 'SIN_ALMUERZO';
     if (tieneEntrada && tieneSalida && tieneSalidaAlmuerzo && !tieneEntradaAlmuerzo) return 'FALTA_ENTRADA_ALMUERZO';
     if (tieneEntrada && tieneSalida && !tieneSalidaAlmuerzo && tieneEntradaAlmuerzo) return 'FALTA_SALIDA_ALMUERZO';
   }
-  
+
   return 'OTRO';
 };
 
@@ -138,12 +130,12 @@ const GRAVEDAD_ESTADOS = {
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
-  
+
   // Soporte para fecha única o rango de fechas
   const fecha = searchParams.get('fecha');
   const fechaInicio = searchParams.get('fechaInicio');
   const fechaFin = searchParams.get('fechaFin');
-  
+
   // Determinar rango efectivo
   let rangoInicio, rangoFin;
   if (fechaInicio && fechaFin) {
@@ -157,45 +149,41 @@ export async function GET(request) {
     ayer.setDate(ayer.getDate() - 1);
     rangoInicio = rangoFin = ayer.toISOString().split('T')[0];
   }
-  
-  const client = new Client(DB_CONFIG);
-  
+
   try {
-    await client.connect();
-    
-    const query = `
-      SELECT 
+    const queryText = `
+      SELECT
         ae.documento,
         ae.nombre,
         ae.fecha,
-        ae.hora_entrada,
-        ae.hora_salida,
-        ae.hora_salida_almuerzo,
-        ae.hora_entrada_almuerzo,
+        CONVERT(VARCHAR(8), ae.hora_entrada, 108) AS hora_entrada,
+        CONVERT(VARCHAR(8), ae.hora_salida, 108) AS hora_salida,
+        CONVERT(VARCHAR(8), ae.hora_salida_almuerzo, 108) AS hora_salida_almuerzo,
+        CONVERT(VARCHAR(8), ae.hora_entrada_almuerzo, 108) AS hora_entrada_almuerzo,
         ae.dispositivo_ip,
         ae.created_at,
         hu.departamento
       FROM attendance_events ae
-      LEFT JOIN hikvision_users hu 
+      LEFT JOIN hikvision_users hu
         ON ae.documento = hu.employee_no
       WHERE ae.fecha BETWEEN $1 AND $2
       ORDER BY ae.fecha, ae.nombre
     `;
-    
-    const result = await client.query(query, [rangoInicio, rangoFin]);
-    
+
+    const result = await query(queryText, [rangoInicio, rangoFin]);
+
     // Procesar todos los registros
     const registrosProcesados = result.rows.map(row => {
       const campana = row.departamento || '';
       const estadoAsistencia = determinarEstadoAsistencia(row, campana);
       const nivelGravedad = GRAVEDAD_ESTADOS[estadoAsistencia] || 'BAJA';
-      
+
       const analisisAlmuerzo = analizarAlmuerzo(
         row.hora_salida_almuerzo,
         row.hora_entrada_almuerzo,
         campana
       );
-      
+
       return {
         documento: row.documento,
         nombre: row.nombre,
@@ -221,7 +209,7 @@ export async function GET(request) {
 
     // Filtrar jornadas completas — nunca se muestran
     const registrosFiltrados = registrosProcesados.filter(r => r.estado !== 'COMPLETO');
-    
+
     // Estadísticas basadas en TODOS los registros (incluyendo completos para referencia)
     const estadisticas = {
       totalRegistros: registrosProcesados.length,
@@ -243,11 +231,11 @@ export async function GET(request) {
         normales: 0
       }
     };
-    
+
     registrosFiltrados.forEach(registro => {
       estadisticas.porEstado[registro.estado] = (estadisticas.porEstado[registro.estado] || 0) + 1;
       estadisticas.porGravedad[registro.gravedad] = (estadisticas.porGravedad[registro.gravedad] || 0) + 1;
-      
+
       switch (registro.almuerzo.estado) {
         case 'NORMAL': estadisticas.almuerzos.normales++; break;
         case 'CURTO': estadisticas.almuerzos.cortos++; break;
@@ -256,12 +244,12 @@ export async function GET(request) {
         case 'NO_REGISTRADO': estadisticas.almuerzos.noRegistrados++; break;
         case 'NO_APLICA': estadisticas.almuerzos.noAplica++; break;
       }
-      
+
       if (registro.horas.salidaAlmuerzo !== '--:--' && registro.horas.entradaAlmuerzo !== '--:--') {
         estadisticas.almuerzos.completos++;
       }
     });
-    
+
     const resumenPorEstado = Object.entries(estadisticas.porEstado)
       .map(([estado, cantidad]) => ({
         estado,
@@ -276,7 +264,7 @@ export async function GET(request) {
         }
         return b.cantidad - a.cantidad;
       });
-    
+
     return NextResponse.json({
       success: true,
       fechaInicio: rangoInicio,
@@ -293,12 +281,12 @@ export async function GET(request) {
       alertas: {
         requiereAccionInmediata: estadisticas.porGravedad.ALTA > 0,
         requiereSeguimiento: estadisticas.porGravedad.MEDIA > 0,
-        problemasAlmuerzo: estadisticas.almuerzos.incompletos > 0 || 
-                          estadisticas.almuerzos.cortos > 0 || 
+        problemasAlmuerzo: estadisticas.almuerzos.incompletos > 0 ||
+                          estadisticas.almuerzos.cortos > 0 ||
                           estadisticas.almuerzos.largos > 0
       }
     });
-    
+
   } catch (error) {
     console.error('Error en API de asistencia:', error);
     return NextResponse.json({
@@ -306,11 +294,6 @@ export async function GET(request) {
       error: error.message,
       timestamp: new Date().toISOString()
     }, { status: 500 });
-    
-  } finally {
-    if (client) {
-      await client.end();
-    }
   }
 }
 

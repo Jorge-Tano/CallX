@@ -1,20 +1,6 @@
 // app/api/eventos/actualizar-eventos/route.js
 import { NextResponse } from 'next/server';
-import { Pool } from 'pg';
-
-// Configuración PostgreSQL
-const pgConfig = {
-    user: process.env.DB_USER || 'postgres',
-    host: process.env.DB_HOST || '127.0.0.1',
-    database: process.env.DB_NAME || 'hikvision_events',
-    password: process.env.DB_PASSWORD || 'OnePiece00.',
-    port: parseInt(process.env.DB_PORT || '5432'),
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
-};
-
-const pool = new Pool(pgConfig);
+import { query } from '@/lib/db/usuarios/database';
 
 // Logger simplificado
 const logger = {
@@ -171,153 +157,39 @@ function formatearEventosParaRespuesta(registros) {
     });
 }
 
-// Función para actualizar eventos específicos
-async function actualizarEventosEspecificos(datos) {
-    const startTime = Date.now();
-    
-    try {
-        logger.info(`🔄 Iniciando actualización de eventos`);
-        
-        let resultados = {
-            actualizados: 0,
-            creados: 0,
-            errores: 0,
-            detalles: []
-        };
-
-        // Si se proporcionan datos específicos para actualizar
-        if (datos && Array.isArray(datos)) {
-            for (const evento of datos) {
-                try {
-                    // Validar datos mínimos requeridos
-                    if (!evento.documento || !evento.fecha) {
-                        resultados.errores++;
-                        resultados.detalles.push({
-                            documento: evento.documento,
-                            fecha: evento.fecha,
-                            error: 'Faltan datos requeridos (documento o fecha)'
-                        });
-                        continue;
-                    }
-
-                    const query = `
-                        INSERT INTO attendance_events (
-                            documento, nombre, fecha, 
-                            hora_entrada, hora_salida, 
-                            hora_salida_almuerzo, hora_entrada_almuerzo,
-                            dispositivo_ip, campaña, "imagen"
-                        ) VALUES ($1, $2, $3, $4::time, $5::time, $6::time, $7::time, $8, $9, $10)
-                        ON CONFLICT (documento, fecha)
-                        DO UPDATE SET
-                            hora_entrada = COALESCE(EXCLUDED.hora_entrada::time, attendance_events.hora_entrada),
-                            hora_salida = COALESCE(EXCLUDED.hora_salida::time, attendance_events.hora_salida),
-                            hora_salida_almuerzo = COALESCE(EXCLUDED.hora_salida_almuerzo::time, attendance_events.hora_salida_almuerzo),
-                            hora_entrada_almuerzo = COALESCE(EXCLUDED.hora_entrada_almuerzo::time, attendance_events.hora_entrada_almuerzo),
-                            nombre = COALESCE(EXCLUDED.nombre, attendance_events.nombre),
-                            dispositivo_ip = EXCLUDED.dispositivo_ip,
-                            campaña = COALESCE(EXCLUDED.campaña, attendance_events.campaña),
-                            "imagen" = COALESCE(EXCLUDED."imagen", attendance_events."imagen")
-                        RETURNING id;
-                    `;
-
-                    const result = await pool.query(query, [
-                        evento.documento,
-                        evento.nombre || 'Sin nombre',
-                        evento.fecha,
-                        evento.hora_entrada || null,
-                        evento.hora_salida || null,
-                        evento.hora_salida_almuerzo || null,
-                        evento.hora_entrada_almuerzo || null,
-                        evento.dispositivo_ip || 'Sistema',
-                        evento.campaña || null, // Usar el valor proporcionado o null
-                        evento.imagen || null
-                    ]);
-
-                    if (result.rows[0]) {
-                        const rowCount = result.rowCount;
-                        if (rowCount > 0) {
-                            resultados.actualizados++;
-                            resultados.detalles.push({
-                                documento: evento.documento,
-                                fecha: evento.fecha,
-                                accion: 'actualizado',
-                                id: result.rows[0].id
-                            });
-                        }
-                    }
-
-                } catch (error) {
-                    resultados.errores++;
-                    resultados.detalles.push({
-                        documento: evento.documento,
-                        fecha: evento.fecha,
-                        error: error.message
-                    });
-                    logger.error(`Error actualizando evento ${evento.documento} - ${evento.fecha}: ${error.message}`);
-                }
-            }
-        } else {
-            // Si no hay datos específicos, solo devolver estadísticas actuales
-            logger.info('ℹ️ No se proporcionaron datos para actualizar, devolviendo estadísticas');
-            
-            const query = `
-                SELECT 
-                    COUNT(*) as total_registros,
-                    COUNT(DISTINCT documento) as personas_unicas,
-                    COUNT(DISTINCT fecha) as dias_registrados,
-                    COUNT(DISTINCT campaña) as campañas_unicas,
-                    MIN(fecha) as primer_registro,
-                    MAX(fecha) as ultimo_registro
-                FROM attendance_events;
-            `;
-
-            const result = await pool.query(query);
-            resultados.estadisticas = result.rows[0];
-        }
-
-        const elapsed = Date.now() - startTime;
-        
-        return {
-            success: true,
-            timestamp: new Date().toISOString(),
-            resultados: resultados,
-            tiempo: {
-                segundos: (elapsed / 1000).toFixed(2),
-                milisegundos: elapsed
-            }
-        };
-
-    } catch (error) {
-        logger.error(`Error en actualización de eventos: ${error.message}`);
-        return {
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString()
-        };
-    }
+// Escribir eventos aquí quedó desactivado: Call-X (Laravel) es ahora la única
+// fuente que sincroniza eventos Hikvision, hacia SQL Server. Este endpoint
+// solo lee. Se deja la función para no romper el contrato de la API (devuelve
+// un error claro en vez de escribir datos duplicados o desactualizados).
+async function actualizarEventosEspecificos() {
+    return {
+        success: false,
+        error: 'Deshabilitado: la sincronización de eventos ahora la hace Call-X (Laravel). Este endpoint es solo de lectura.',
+        timestamp: new Date().toISOString()
+    };
 }
 
 // Función para obtener análisis detallado
 async function obtenerAnalisisEventos(filtros = {}) {
     try {
         const { fechaInicio, fechaFin, campaña, ejecutivo } = filtros;
-        
-        let query = `
-            SELECT 
-                documento, 
-                nombre, 
+
+        let queryText = `
+            SELECT
+                documento,
+                nombre,
                 fecha,
-                hora_entrada, 
-                hora_salida, 
-                hora_salida_almuerzo, 
-                hora_entrada_almuerzo,
+                CONVERT(VARCHAR(8), hora_entrada, 108) AS hora_entrada,
+                CONVERT(VARCHAR(8), hora_salida, 108) AS hora_salida,
+                CONVERT(VARCHAR(8), hora_salida_almuerzo, 108) AS hora_salida_almuerzo,
+                CONVERT(VARCHAR(8), hora_entrada_almuerzo, 108) AS hora_entrada_almuerzo,
                 campaña,
                 COUNT(*) as total,
                 SUM(CASE WHEN hora_entrada IS NOT NULL THEN 1 ELSE 0 END) as con_entrada,
                 SUM(CASE WHEN hora_salida IS NOT NULL THEN 1 ELSE 0 END) as con_salida,
                 SUM(CASE WHEN hora_salida_almuerzo IS NOT NULL THEN 1 ELSE 0 END) as con_salida_almuerzo,
                 SUM(CASE WHEN hora_entrada_almuerzo IS NOT NULL THEN 1 ELSE 0 END) as con_entrada_almuerzo
-            FROM attendance_events 
+            FROM attendance_events
             WHERE 1=1
         `;
 
@@ -325,47 +197,47 @@ async function obtenerAnalisisEventos(filtros = {}) {
         let paramIndex = 1;
 
         if (fechaInicio) {
-            query += ` AND fecha >= $${paramIndex}`;
+            queryText += ` AND fecha >= $${paramIndex}`;
             params.push(fechaInicio);
             paramIndex++;
         }
 
         if (fechaFin) {
-            query += ` AND fecha <= $${paramIndex}`;
+            queryText += ` AND fecha <= $${paramIndex}`;
             params.push(fechaFin);
             paramIndex++;
         }
 
         if (campaña && campaña !== 'Todos' && campaña !== 'todos') {
-            query += ` AND campaña ILIKE $${paramIndex}`;
-            params.push(`%${campaña}%`);
+            queryText += ` AND campaña = $${paramIndex}`;
+            params.push(campaña);
             paramIndex++;
         }
 
         if (ejecutivo) {
-            query += ` AND nombre ILIKE $${paramIndex}`;
+            queryText += ` AND nombre LIKE $${paramIndex}`;
             params.push(`%${ejecutivo}%`);
             paramIndex++;
         }
 
-        query += `
+        queryText += `
             GROUP BY documento, nombre, fecha, campaña,
-                     hora_entrada, hora_salida, 
+                     hora_entrada, hora_salida,
                      hora_salida_almuerzo, hora_entrada_almuerzo
             ORDER BY fecha DESC, documento;
         `;
 
-        const result = await pool.query(query, params);
+        const result = await query(queryText, params);
         const registros = result.rows;
 
         // Obtener lista única de campañas disponibles
         const campañasQuery = `
-            SELECT DISTINCT campaña 
-            FROM attendance_events 
+            SELECT DISTINCT campaña
+            FROM attendance_events
             WHERE campaña IS NOT NULL AND campaña != ''
             ORDER BY campaña
         `;
-        const campañasResult = await pool.query(campañasQuery);
+        const campañasResult = await query(campañasQuery);
         const campañasDisponibles = campañasResult.rows.map(row => row.campaña);
 
         // Calcular estadísticas
@@ -404,47 +276,47 @@ async function obtenerAnalisisEventos(filtros = {}) {
 export async function POST(request) {
     try {
         logger.info(`📥 Solicitud POST recibida en /api/eventos/actualizar-eventos`);
-        
+
         const body = await request.json().catch(() => ({}));
-        
+
         // Determinar el tipo de operación
         const operacion = body.operacion || 'actualizar';
-        
+
         switch (operacion) {
             case 'actualizar':
-                // Actualizar eventos específicos
-                return NextResponse.json(await actualizarEventosEspecificos(body.datos));
-                
+                // Deshabilitado — ver actualizarEventosEspecificos()
+                return NextResponse.json(await actualizarEventosEspecificos(), { status: 410 });
+
             case 'analizar':
                 // Obtener análisis de eventos
                 return NextResponse.json(await obtenerAnalisisEventos(body.filtros));
-                
+
             case 'estadisticas':
                 // Obtener estadísticas generales
                 const statsQuery = `
-                    SELECT 
+                    SELECT
                         campaña,
                         COUNT(*) as total_registros,
                         COUNT(DISTINCT documento) as empleados_unicos,
                         MIN(fecha) as primera_fecha,
                         MAX(fecha) as ultima_fecha,
-                        ROUND(AVG(CASE WHEN hora_entrada IS NOT NULL THEN 1 ELSE 0 END) * 100, 2) as porcentaje_entrada,
-                        ROUND(AVG(CASE WHEN hora_salida IS NOT NULL THEN 1 ELSE 0 END) * 100, 2) as porcentaje_salida
-                    FROM attendance_events 
+                        ROUND(AVG(CASE WHEN hora_entrada IS NOT NULL THEN 1.0 ELSE 0.0 END) * 100, 2) as porcentaje_entrada,
+                        ROUND(AVG(CASE WHEN hora_salida IS NOT NULL THEN 1.0 ELSE 0.0 END) * 100, 2) as porcentaje_salida
+                    FROM attendance_events
                     WHERE campaña IS NOT NULL AND campaña != ''
                     GROUP BY campaña
                     ORDER BY total_registros DESC;
                 `;
-                
-                const result = await pool.query(statsQuery);
-                
+
+                const result = await query(statsQuery);
+
                 return NextResponse.json({
                     success: true,
                     estadisticas: result.rows,
                     totalCampañas: result.rowCount,
                     timestamp: new Date().toISOString()
                 });
-                
+
             default:
                 return NextResponse.json({
                     success: false,
@@ -466,10 +338,10 @@ export async function POST(request) {
 export async function GET(request) {
     try {
         logger.info(`📥 Solicitud GET recibida en /api/eventos/actualizar-eventos`);
-        
+
         const url = new URL(request.url);
         const operacion = url.searchParams.get('operacion') || 'analizar';
-        
+
         // Preparar filtros desde query parameters
         const filtros = {
             fechaInicio: url.searchParams.get('fechaInicio'),
@@ -477,53 +349,53 @@ export async function GET(request) {
             campaña: url.searchParams.get('campaña'),
             ejecutivo: url.searchParams.get('ejecutivo')
         };
-        
+
         switch (operacion) {
             case 'analizar':
                 return NextResponse.json(await obtenerAnalisisEventos(filtros));
-                
+
             case 'estadisticas':
                 // Obtener estadísticas generales
                 const statsQuery = `
-                    SELECT 
+                    SELECT
                         COUNT(*) as total_registros,
                         COUNT(DISTINCT documento) as personas_unicas,
                         COUNT(DISTINCT fecha) as dias_registrados,
                         COUNT(DISTINCT campaña) as campañas_unicas,
                         MIN(fecha) as primer_registro,
                         MAX(fecha) as ultimo_registro,
-                        ROUND(AVG(CASE WHEN hora_entrada IS NOT NULL THEN 1 ELSE 0 END) * 100, 2) as porcentaje_con_entrada,
-                        ROUND(AVG(CASE WHEN hora_salida IS NOT NULL THEN 1 ELSE 0 END) * 100, 2) as porcentaje_con_salida
+                        ROUND(AVG(CASE WHEN hora_entrada IS NOT NULL THEN 1.0 ELSE 0.0 END) * 100, 2) as porcentaje_con_entrada,
+                        ROUND(AVG(CASE WHEN hora_salida IS NOT NULL THEN 1.0 ELSE 0.0 END) * 100, 2) as porcentaje_con_salida
                     FROM attendance_events;
                 `;
-                
-                const result = await pool.query(statsQuery);
-                
+
+                const result = await query(statsQuery);
+
                 return NextResponse.json({
                     success: true,
                     estadisticas: result.rows[0],
                     timestamp: new Date().toISOString()
                 });
-                
+
             case 'campañas':
                 // Obtener lista de campañas disponibles
                 const campañasQuery = `
                     SELECT DISTINCT campaña, COUNT(*) as total_registros
-                    FROM attendance_events 
+                    FROM attendance_events
                     WHERE campaña IS NOT NULL AND campaña != ''
                     GROUP BY campaña
                     ORDER BY campaña;
                 `;
-                
-                const campañasResult = await pool.query(campañasQuery);
-                
+
+                const campañasResult = await query(campañasQuery);
+
                 return NextResponse.json({
                     success: true,
                     campañas: campañasResult.rows,
                     total: campañasResult.rowCount,
                     timestamp: new Date().toISOString()
                 });
-                
+
             default:
                 return NextResponse.json({
                     success: false,
@@ -536,36 +408,14 @@ export async function GET(request) {
         logger.error(`Error en endpoint GET: ${error.message}`);
         return NextResponse.json({
             success: false,
-            error: error.message,
-            timestamp: new Date().toISOString()
+            error: error.message
         }, { status: 500 });
     }
 }
 
 export async function PUT(request) {
-    try {
-        logger.info(`📥 Solicitud PUT recibida en /api/eventos/actualizar-eventos`);
-        
-        const body = await request.json();
-        
-        if (!body.datos || !Array.isArray(body.datos)) {
-            return NextResponse.json({
-                success: false,
-                error: 'Se requiere un array "datos" con los eventos a actualizar',
-                timestamp: new Date().toISOString()
-            }, { status: 400 });
-        }
-        
-        return NextResponse.json(await actualizarEventosEspecificos(body.datos));
-
-    } catch (error) {
-        logger.error(`Error en endpoint PUT: ${error.message}`);
-        return NextResponse.json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString()
-        }, { status: 500 });
-    }
+    logger.info(`📥 Solicitud PUT recibida en /api/eventos/actualizar-eventos (deshabilitada)`);
+    return NextResponse.json(await actualizarEventosEspecificos(), { status: 410 });
 }
 
 // Configuración de runtime

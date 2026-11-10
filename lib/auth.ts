@@ -1,7 +1,6 @@
 import { NextAuthOptions } from "next-auth"
 import CredentialsProvider from "next-auth/providers/credentials"
-import { pool } from '@/lib/db'
-import { Client as PgClient } from 'pg'
+import { query } from '@/lib/db/usuarios/database'
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -20,25 +19,10 @@ export const authOptions: NextAuthOptions = {
           return null
         }
 
-        let client;
-        let isPoolClient = false;
-
         try {
-          client = new PgClient({
-            host: process.env.DB_HOST,
-            port: process.env.DB_PORT ? parseInt(process.env.DB_PORT) : undefined,
-            database: process.env.DB_NAME,
-            user: process.env.DB_USER,
-            password: process.env.DB_PASSWORD,
-            ssl: false
-          })
-
-          await client.connect()
-          isPoolClient = false
-
           const usuarioParam = credentials.usuario.trim()
           const queryText = `SELECT id, documento, nombre, rol, users, passward, campaña FROM auth WHERE users = $1`
-          const result = await client.query(queryText, [usuarioParam])
+          const result = await query(queryText, [usuarioParam])
 
           if (result.rows.length === 0) {
             return null
@@ -66,21 +50,13 @@ export const authOptions: NextAuthOptions = {
 
         } catch (error: any) {
           return null
-        } finally {
-          if (client) {
-            if (isPoolClient) {
-              (client as any).release()
-            } else {
-              await (client as PgClient).end()
-            }
-          }
         }
       }
     })
   ],
 
   pages: {
-    signIn: '/login',
+    signIn: '/',
     error: '/auth/error',
     newUser: '/register'
   },

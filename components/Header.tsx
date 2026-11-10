@@ -1,6 +1,5 @@
 // components/Header.tsx
 import { useState, useEffect } from 'react';
-import { useHideFrom } from "@/lib/hooks/useRole";
 
 interface HeaderEventosProps {
   estadisticas: {
@@ -45,18 +44,14 @@ export function HeaderEventos({
   fechaFin,
 }: HeaderEventosProps) {
 
-  const { shouldHide } = useHideFrom();
   const [localFechaInicio, setLocalFechaInicio] = useState(fechaInicio);
   const [localFechaFin, setLocalFechaFin] = useState(fechaFin);
-  const [isSincronizando, setIsSincronizando] = useState(false);
-  const [syncResult, setSyncResult] = useState<{
-    success?: boolean;
-    message?: string;
-    eventosObtenidos?: number;
-    registros_procesados?: number;
-    tiempo_segundos?: number;
-    diasProcesados?: number;
-  } | null>(null);
+  // Nota: la sincronización manual completa se quitó de aquí — Call-X (Laravel)
+  // ahora sincroniza los eventos automáticamente cada minuto, así que este botón
+  // ya no tenía nada que hacer (el endpoint que llamaba quedó deshabilitado).
+  // isSincronizando se mantiene solo porque otros controles de este componente
+  // lo usan como guarda de "disabled"; siempre será false.
+  const [isSincronizando] = useState(false);
 
   // Estados para el filtro de ejecutivos con búsqueda
   const [searchEjecutivo, setSearchEjecutivo] = useState('');
@@ -117,48 +112,6 @@ export function HeaderEventos({
     onFechasChange(fechaInicio, nuevaFin);
   };
 
-  // Función para sincronizar TODOS los eventos
-  const handleSincronizarTodo = async () => {
-    setIsSincronizando(true);
-    setSyncResult(null);
-
-    try {
-      const response = await fetch('/api/eventos/actualizar-eventos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
-
-      if (!response.ok) {
-        throw new Error(`Error HTTP: ${response.status}`);
-      }
-
-      const data = await response.json();
-      
-      if (data.success) {
-        setSyncResult({
-          success: true,
-          message: data.procesamiento?.message || 'Sincronización completada',
-          eventosObtenidos: data.estadisticas?.eventosObtenidos || 0,
-          registros_procesados: data.procesamiento?.saved || 0,
-          diasProcesados: data.procesamiento?.diasProcesados || 0,
-          tiempo_segundos: data.tiempo?.segundos || '0.00'
-        });
-
-        // Refrescar después de 2 segundos
-        setTimeout(() => {
-          if (onRefresh) onRefresh();
-        }, 2000);
-      } else {
-        throw new Error(data.error || 'Error en sincronización');
-      }
-    } catch (error: any) {
-      console.error('❌ Error sincronizando:', error);
-      alert(`❌ ERROR EN SINCRONIZACIÓN\n\n${error.message || 'Error desconocido'}`);
-    } finally {
-      setIsSincronizando(false);
-    }
-  };
-
   // Función para seleccionar ejecutivo
   const handleSelectEjecutivo = (ejecutivo: string) => {
     onEjecutivoChange(ejecutivo);
@@ -171,16 +124,6 @@ export function HeaderEventos({
     onEjecutivoChange(null);
     setSearchEjecutivo('');
   };
-
-  // Limpiar mensaje de sincronización después de 5 segundos
-  useEffect(() => {
-    if (syncResult && syncResult.success) {
-      const timer = setTimeout(() => {
-        setSyncResult(null);
-      }, 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [syncResult]);
 
   // Colores para departamentos
   const getDepartamentoColor = (depto: string) => {
@@ -211,29 +154,6 @@ export function HeaderEventos({
               </div>
 
               <div className="flex items-center gap-2">
-                {!shouldHide(['TI', 'Team Leader']) && (
-                  <button
-                    onClick={handleSincronizarTodo}
-                    disabled={isSincronizando || isRefreshing}
-                    className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-lg font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
-                    title="Sincronizar TODOS los eventos históricos"
-                  >
-                    {isSincronizando ? (
-                      <>
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                        Sincronizando...
-                      </>
-                    ) : (
-                      <>
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                        </svg>
-                        Sincronizar Todo
-                      </>
-                    )}
-                  </button>
-                )}
-
                 {/* Botón de actualizar normal */}
                 <button
                   onClick={onRefresh}
@@ -258,60 +178,6 @@ export function HeaderEventos({
               </div>
             </div>
 
-            {/* Mensaje de resultado de sincronización */}
-            {syncResult && syncResult.success && (
-              <div className="mb-4 p-3 bg-gradient-to-r from-green-900/30 to-emerald-900/30 rounded-lg border border-green-500/30 animate-pulse">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="text-green-400">
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-green-300">{syncResult.message}</p>
-                      <div className="flex gap-4 mt-1 text-xs text-green-200">
-                        <span>📅 Días procesados: {syncResult.diasProcesados}</span>
-                        <span>📊 Eventos obtenidos: {syncResult.eventosObtenidos}</span>
-                        <span>💾 Registros guardados: {syncResult.registros_procesados}</span>
-                        <span>⏱️ Tiempo: {syncResult.tiempo_segundos}s</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Indicador de tiempo */}
-                  <div className="flex items-center gap-2">
-                    <div className="relative w-8 h-8">
-                      <svg className="w-8 h-8 transform -rotate-90">
-                        <circle
-                          cx="16"
-                          cy="16"
-                          r="7"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          fill="none"
-                          className="text-green-900/50"
-                        />
-                        <circle
-                          cx="16"
-                          cy="16"
-                          r="7"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          fill="none"
-                          strokeDasharray="44"
-                          strokeDashoffset="44"
-                          className="text-green-400 animate-countdown"
-                          style={{
-                            animation: 'countdown 5s linear forwards'
-                          }}
-                        />
-                      </svg>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
 
           {/* SEGUNDA FILA: Filtros de período y fechas */}

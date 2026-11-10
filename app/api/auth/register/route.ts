@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { pool } from "@/lib/db"
+// pool.connect() -> client.query()/client.release() sigue funcionando igual
+// que antes (ver lib/db.ts), ahora respaldado por SQL Server.
 
 
 export async function POST(request: NextRequest) {
@@ -118,15 +120,16 @@ export async function POST(request: NextRequest) {
       
       const insertQuery = `
         INSERT INTO auth (
-          documento, 
-          nombre, 
-          users, 
-          passward, 
-          fecha_registro, 
+          documento,
+          nombre,
+          users,
+          passward,
+          fecha_registro,
           rol,
           campaña
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, documento, nombre, users, fecha_registro, rol, campaña
+        )
+        OUTPUT INSERTED.id, INSERTED.documento, INSERTED.nombre, INSERTED.users, INSERTED.fecha_registro, INSERTED.rol, INSERTED.campaña
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
       `
       
       console.log("📝 Query:", insertQuery)
@@ -180,43 +183,29 @@ export async function POST(request: NextRequest) {
 
     } catch (dbError: any) {
       console.error("💥 Error en base de datos:", dbError)
-      
-      // Manejo de errores específicos de PostgreSQL
-      if (dbError.code === '42703') { // Columna no existe
+
+      // Manejo de errores específicos de SQL Server (mssql)
+      if (dbError.number === 207) { // Invalid column name
         console.log("⚠️ Error de columna. Verificando estructura de tabla...")
-        
+
         try {
-          // Verificar si la columna 'campaña' existe
           const columnCheck = await client.query(`
             SELECT column_name, data_type
-            FROM information_schema.columns 
+            FROM information_schema.columns
             WHERE table_name = 'auth' AND column_name = 'campaña'
           `)
-          
+
           if (columnCheck.rows.length === 0) {
             console.log("❌ Columna 'campaña' no existe en tabla 'auth'")
             return NextResponse.json(
-              { 
+              {
                 error: "La columna 'campaña' no existe en la tabla. Por favor, agrega la columna primero.",
-                sugerencia: "Ejecuta: ALTER TABLE auth ADD COLUMN campaña VARCHAR(50);"
+                sugerencia: "Ejecuta: ALTER TABLE auth ADD campaña VARCHAR(50);"
               },
               { status: 500 }
             )
-          } else {
-            console.log("⚠️ Tipo de columna 'campaña':", columnCheck.rows[0].data_type)
-            // Si la columna existe pero es de tipo incorrecto, sugerir cambio
-            if (columnCheck.rows[0].data_type !== 'character varying' && 
-                columnCheck.rows[0].data_type !== 'text') {
-              return NextResponse.json(
-                { 
-                  error: `La columna 'campaña' es de tipo ${columnCheck.rows[0].data_type}. Se requiere VARCHAR o TEXT.`,
-                  sugerencia: "Ejecuta: ALTER TABLE auth ALTER COLUMN campaña TYPE VARCHAR(50);"
-                },
-                { status: 500 }
-              )
-            }
           }
-          
+
           return NextResponse.json(
             { error: "Error en la estructura de la tabla 'auth'." },
             { status: 500 }
@@ -228,19 +217,19 @@ export async function POST(request: NextRequest) {
           )
         }
       }
-      
-      if (dbError.code === '23505') { // Violación de unique constraint
+
+      if (dbError.number === 2627 || dbError.number === 2601) { // Violación de unique constraint / índice único
         return NextResponse.json(
           { error: "El usuario o documento ya existe en el sistema" },
           { status: 400 }
         )
       }
-      
+
       return NextResponse.json(
         { error: `Error en base de datos: ${dbError.message}` },
         { status: 500 }
       )
-      
+
     } finally {
       client.release()
       console.log("🔓 Conexión a BD liberada")

@@ -173,9 +173,36 @@ export default function UsuariosPage() {
     setPaginaActual(1);
   };
 
-  // Botón para forzar recarga de datos
+  // Botón para forzar recarga de datos (solo relee lo que ya hay en la BD)
   const handleRefreshData = async () => {
     await cargarUsuarios();
+  };
+
+  // Botón para sincronizar de verdad con los dispositivos Hikvision (IP1 + IP2)
+  // y traer a la base de datos cualquier persona/departamento creado directo
+  // en un dispositivo (por ejemplo, por TI) que todavía no aparezca en la app.
+  const [sincronizando, setSincronizando] = useState(false);
+  const sincronizarConDispositivos = async () => {
+    setSincronizando(true);
+    try {
+      const response = await fetch('/api/users', { method: 'GET' });
+      const data = await response.json();
+
+      if (data.success) {
+        const creados = data.stats?.sync_created ?? 0;
+        const actualizados = data.stats?.sync_updated ?? 0;
+        alert(`✅ Sincronización completada\nNuevos: ${creados}\nActualizados: ${actualizados}`);
+      } else {
+        alert(`❌ Error al sincronizar: ${data.error || 'Error desconocido'}`);
+      }
+
+      await cargarUsuarios(false);
+    } catch (error: any) {
+      console.error('❌ Error sincronizando con dispositivos:', error);
+      alert(`❌ Error al sincronizar con los dispositivos: ${error.message}`);
+    } finally {
+      setSincronizando(false);
+    }
   };
 
   // 🔥 FUNCIONES CRUD ACTUALIZADAS PARA RECARGAR PÁGINA
@@ -375,12 +402,33 @@ export default function UsuariosPage() {
             {/* MOSTRAR FILTROS SOLO PARA TI/Admin */}
             {isGlobalAccess && (
               <div className="mt-3 pt-3 border-t border-slate-500/50">
-                <div className="flex items-center text-sm font-medium mb-2 text-slate-200">
-                  <svg className="w-4 h-4 mr-2 text-emerald-400" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
-                    <path fillRule="evenodd" d="M3 3a1 1 0 011-1h12a1 1 0 011 1v3a1 1 0 01-.293.707L12 11.414V15a1 1 0 01-.293.707l-2 2A1 1 0 018 17v-5.586L3.293 6.707A1 1 0 013 6V3z" clipRule="evenodd" />
-                  </svg>
-                  Filtrar por Departamento ({getDepartamentosUnicos().length})
-                  <span className="ml-2 text-xs text-slate-400">• Click para filtrar/desfiltrar</span>
+                <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+                  <div className="flex items-center text-sm font-medium text-slate-200">
+                    <svg className="w-4 h-4 mr-2 text-emerald-400" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                      <path fillRule="evenodd" d="M3 3a1 1 0 011-1h12a1 1 0 011 1v3a1 1 0 01-.293.707L12 11.414V15a1 1 0 01-.293.707l-2 2A1 1 0 018 17v-5.586L3.293 6.707A1 1 0 013 6V3z" clipRule="evenodd" />
+                    </svg>
+                    Filtrar por Departamento ({getDepartamentosUnicos().length})
+                    <span className="ml-2 text-xs text-slate-400">• Click para filtrar/desfiltrar</span>
+                  </div>
+
+                  <button
+                    onClick={sincronizarConDispositivos}
+                    disabled={sincronizando}
+                    title="Trae de los dispositivos Hikvision (IP1 y IP2) a cualquier persona o departamento nuevo que no aparezca todavía en la app"
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-700/80 hover:bg-emerald-600/80 text-white border border-emerald-500/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {sincronizando ? (
+                      <>
+                        <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-white"></div>
+                        Sincronizando...
+                      </>
+                    ) : (
+                      <>
+                        <i className="bi bi-arrow-repeat"></i>
+                        Sincronizar con dispositivos
+                      </>
+                    )}
+                  </button>
                 </div>
 
                 <div className="overflow-x-auto pb-2">
@@ -410,6 +458,7 @@ export default function UsuariosPage() {
                         "Campana PL": "from-indigo-600 to-indigo-500 border-indigo-500/50",
                         "Campana PARLO": "from-pink-600 to-pink-500 border-pink-500/50",
                         "Administrativo": "from-slate-600 to-slate-500 border-slate-500/50",
+                        "Practicantes": "from-teal-600 to-teal-500 border-teal-500/50",
                         "No asignado": "from-gray-600 to-gray-500 border-gray-500/50"
                       };
 

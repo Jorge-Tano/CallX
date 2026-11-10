@@ -98,9 +98,9 @@ async function deleteUserFromDatabase(employeeNo) {
     
     // 2. Eliminar el usuario
     const deleteQuery = `
-      DELETE FROM hikvision_users  
-      WHERE employee_no = $1 
-      RETURNING employee_no, nombre
+      DELETE FROM hikvision_users
+      OUTPUT DELETED.employee_no, DELETED.nombre
+      WHERE employee_no = $1
     `;
     
     const deleteResult = await query(deleteQuery, [employeeNo]);
@@ -114,11 +114,12 @@ async function deleteUserFromDatabase(employeeNo) {
     // 3. Registrar en tabla de eliminaciones (opcional, para auditoría)
     try {
       await query(`
-        CREATE TABLE IF NOT EXISTS usuarios_eliminados_audit (
-          id SERIAL PRIMARY KEY,
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'usuarios_eliminados_audit')
+        CREATE TABLE usuarios_eliminados_audit (
+          id INT IDENTITY(1,1) PRIMARY KEY,
           employee_no VARCHAR(50) NOT NULL,
           nombre VARCHAR(255),
-          fecha_eliminacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          fecha_eliminacion DATETIME2 DEFAULT GETDATE(),
           eliminado_por VARCHAR(100) DEFAULT 'sistema'
         )
       `);

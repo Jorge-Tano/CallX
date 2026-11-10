@@ -192,6 +192,7 @@ export const generarExcelDesdeEventos = (
  * Genera un Excel con exactamente las mismas columnas del reporte normal
  * más "Minutos Después de 19:00" como última columna.
  * Los registros se ordenan de mayor a menor tiempo extra.
+ * El resumen muestra el TOTAL de horas nocturnas acumuladas por empleado.
  */
 export const generarExcelNocturno = (
   eventos: any[],
@@ -230,33 +231,44 @@ export const generarExcelNocturno = (
 
   XLSX.utils.book_append_sheet(wb, ws, 'Salidas Nocturnas');
 
-  // Hoja de resumen nocturno
-  const resumenData: (string | number)[][] = [
-    ['REPORTE DE SALIDAS DESPUÉS DE 19:00'],
-    [''],
-    ['Fecha de generación:', new Date().toLocaleString('es-CO')],
-    ['Total empleados:', eventosFiltrados.length],
-    [''],
-    ['DISTRIBUCIÓN POR CAMPAÑA'],
-  ];
-
-  const conteoCampaña: Record<string, number> = eventosFiltrados.reduce((acc, e) => {
-    const c = e.campaña || 'Sin grupo';
-    acc[c] = (acc[c] || 0) + 1;
+  // ─── NUEVO RESUMEN NOCTURNO: SUMA de horas nocturnas por empleado (solo número) ───
+  
+  // Calcular suma de minutos nocturnos por empleado
+  const sumaMinutosPorEmpleado: Record<string, number> = eventosFiltrados.reduce((acc, evento) => {
+    const nombre = evento.nombre || 'Sin nombre';
+    const minutosNocturnos = minutosExtrasNoche(evento.horaSalida);
+    acc[nombre] = (acc[nombre] || 0) + minutosNocturnos;
     return acc;
   }, {} as Record<string, number>);
 
-  Object.entries(conteoCampaña)
-    .sort(([, a]: [string, number], [, b]: [string, number]) => b - a)
-    .forEach(([c, count]) => resumenData.push([c, count]));
+  // Convertir minutos a horas (con 1 decimal o entero según prefieras)
+  const minutosAHoras = (minutosTotales: number): string => {
+    const horas = minutosTotales / 60;
+    // Si quieres solo número entero (sin decimales):
+    return Math.floor(horas).toString();
+    // Si quieres con 1 decimal (ej: 3.5 horas), usa:
+    // return horas.toFixed(1);
+  };
 
-  resumenData.push([''], ['TOP 5 SALIDAS MÁS TARDÍAS']);
-  datosExcel.slice(0, 5).forEach(e =>
-    resumenData.push([e['Nombre'], e['Hora Salida'], `+${e['Minutos Después de 19:00']} min`])
-  );
+  // Crear array para la tabla de resumen
+  const resumenData: (string | string[])[][] = [
+    ['Empleado', 'Horas Nocturnas'],
+  ];
+
+  // Agregar cada empleado con su total (ordenado de mayor a menor horas)
+  Object.entries(sumaMinutosPorEmpleado)
+    .sort(([, minutosA], [, minutosB]) => minutosB - minutosA)
+    .forEach(([nombre, minutos]) => {
+      resumenData.push([nombre, minutosAHoras(minutos)]);
+    });
+
+  // Calcular total general de minutos
+  const totalMinutos = Object.values(sumaMinutosPorEmpleado).reduce((a, b) => a + b, 0);
+  resumenData.push(['Total general', minutosAHoras(totalMinutos)]);
 
   const wsResumen = XLSX.utils.aoa_to_sheet(resumenData);
-  wsResumen['!cols'] = [{ wch: 30 }, { wch: 15 }, { wch: 15 }];
+  wsResumen['!cols'] = [{ wch: 40 }, { wch: 18 }];
+  
   XLSX.utils.book_append_sheet(wb, wsResumen, 'Resumen Nocturno');
 
   descargarBuffer(wb, nombreArchivo);

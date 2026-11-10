@@ -17,17 +17,6 @@ interface UsuarioForm {
   departamento: string;
 }
 
-const DEPARTAMENTOS = [
-  { id: "1", nombre: "TI" },
-  { id: "2", nombre: "Teams Leaders" },
-  { id: "3", nombre: "Campana 5757" },
-  { id: "4", nombre: "Campana SAV" },
-  { id: "5", nombre: "Campana REFI" },
-  { id: "6", nombre: "Campana PL" },
-  { id: "7", nombre: "Campana PARLO" },
-  { id: "8", nombre: "Administrativo" }
-];
-
 const GENEROS = ["Masculino", "Femenino", "Otro"];
 
 export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: UsuarioCreateModalProps) {
@@ -38,6 +27,20 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [progress, setProgress] = useState<number>(0);
+  const [departamentoPersonalizado, setDepartamentoPersonalizado] = useState(false);
+  const [departamentos, setDepartamentos] = useState<{ groupId: number; nombre: string }[]>([]);
+
+  // Traer la lista de departamentos desde la base de datos, no del código,
+  // para que cualquier grupo nuevo (creado desde aquí o directo en el
+  // dispositivo) aparezca sin necesitar un despliegue.
+  useEffect(() => {
+    fetch('/api/departamentos', { credentials: 'include' })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) setDepartamentos(data.data);
+      })
+      .catch(() => {});
+  }, []);
 
   // Formulario individual
   const [individualForm, setIndividualForm] = useState<UsuarioForm>({
@@ -253,6 +256,7 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
         numeroEmpleado: "",
         departamento: defaultDepartamento || ""
       });
+      setDepartamentoPersonalizado(false);
 
       setUsuariosMasivos([
         { nombre: "", genero: "", numeroEmpleado: "", departamento: defaultDepartamento || "" }
@@ -430,19 +434,41 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
                     </label>
                     <select
                       name="departamento"
-                      value={individualForm.departamento}
-                      onChange={handleIndividualChange}
+                      value={departamentoPersonalizado ? "__nuevo__" : individualForm.departamento}
+                      onChange={(e) => {
+                        if (e.target.value === "__nuevo__") {
+                          setDepartamentoPersonalizado(true);
+                          setIndividualForm(prev => ({ ...prev, departamento: "" }));
+                        } else {
+                          setDepartamentoPersonalizado(false);
+                          handleIndividualChange(e);
+                        }
+                      }}
                       className="border border-gray-300 p-2 rounded-md text-black w-full focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
-                      required
+                      required={!departamentoPersonalizado}
                       disabled={loading}
                     >
                       <option value="">Seleccionar departamento</option>
-                      {DEPARTAMENTOS.map(depto => (
-                        <option key={depto.id} value={depto.nombre}>
+                      {departamentos.map(depto => (
+                        <option key={depto.groupId} value={depto.nombre}>
                           {depto.nombre}
                         </option>
                       ))}
+                      <option value="__nuevo__">+ Nuevo departamento...</option>
                     </select>
+
+                    {departamentoPersonalizado && (
+                      <input
+                        type="text"
+                        name="departamento"
+                        placeholder="Nombre del nuevo departamento *"
+                        value={individualForm.departamento}
+                        onChange={handleIndividualChange}
+                        className="mt-2 border border-gray-300 p-2 rounded-md text-black w-full focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
+                        required
+                        disabled={loading}
+                      />
+                    )}
                   </div>
 
                   <div className="md:col-span-2 mt-6">
