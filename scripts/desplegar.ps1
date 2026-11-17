@@ -1,6 +1,6 @@
 # Despliegue de CallX en el PC de produccion
 #
-# Uso (desde la carpeta del proyecto, p. ej. C:\proyectos\callx):
+# Uso (desde la carpeta del proyecto, C:\Proyectos\CallX):
 #   powershell -ExecutionPolicy Bypass -File .\scripts\desplegar.ps1
 #
 # Que hace:
@@ -17,7 +17,22 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-Set-Location (Split-Path $PSScriptRoot -Parent)
+
+# Devuelve la ruta con las mayusculas reales del disco. Windows acepta
+# "C:\proyectos\callx" para "C:\Proyectos\CallX", pero Next carga entonces
+# cada modulo dos veces (una por cada forma de escribir la ruta) y el build
+# falla con "Expected workUnitAsyncStorage to have a store".
+function Get-RutaReal([string]$ruta) {
+    $dir = New-Object System.IO.DirectoryInfo($ruta)
+    if ($null -eq $dir.Parent) { return $dir.Name.ToUpper() }
+    $padre = Get-RutaReal $dir.Parent.FullName
+    $nombre = ($dir.Parent.GetFileSystemInfos($dir.Name) | Select-Object -First 1).Name
+    return (Join-Path $padre $nombre)
+}
+
+$proyecto = Get-RutaReal (Split-Path $PSScriptRoot -Parent)
+Set-Location -LiteralPath $proyecto
+Write-Host "Proyecto: $proyecto"
 
 function Invoke-Git {
     & git.exe @args
