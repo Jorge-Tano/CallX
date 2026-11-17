@@ -25,7 +25,14 @@ $clave = Read-Host "Clave para proteger el certificado (anotala para el .env)" -
 $cert = New-SelfSignedCertificate `
     -Subject "CN=CallX $Ip" `
     -FriendlyName "CallX HTTPS" `
-    -TextExtension @("2.5.29.17={text}IPAddress=$Ip&DNS=$Nombre&DNS=localhost&IPAddress=127.0.0.1") `
+    -TextExtension @(
+        "2.5.29.17={text}IPAddress=$Ip&DNS=$Nombre&DNS=localhost&IPAddress=127.0.0.1",
+        # No es una autoridad: aunque se instale como "raiz de confianza" en los
+        # PCs, no sirve para firmar certificados de otros sitios.
+        "2.5.29.19={critical}{text}ca=false",
+        # Solo para servidor web (TLS)
+        "2.5.29.37={text}1.3.6.1.5.5.7.3.1"
+    ) `
     -KeyAlgorithm RSA -KeyLength 2048 `
     -KeyExportPolicy Exportable `
     -NotAfter (Get-Date).AddYears($Anios) `

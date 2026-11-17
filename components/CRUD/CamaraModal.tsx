@@ -25,6 +25,8 @@ export default function CamaraModal({ abierto, titulo, guia, onCaptura, onCerrar
   const [camaraId, setCamaraId] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [listo, setListo] = useState(false);
+  // Página abierta por HTTP: el navegador no da acceso a la cámara
+  const [inseguro, setInseguro] = useState<{ disponible: boolean; httpsUrl: string } | null>(null);
 
   const detener = useCallback(() => {
     streamRef.current?.getTracks().forEach(t => t.stop());
@@ -36,7 +38,13 @@ export default function CamaraModal({ abierto, titulo, guia, onCaptura, onCerrar
     detener();
     setError(null);
     if (!camaraDisponible()) {
-      setError("La cámara solo funciona si la app se abre por HTTPS (o en este mismo equipo con localhost).");
+      try {
+        const res = await fetch("/api/certificado", { credentials: "include" });
+        const info = await res.json();
+        setInseguro({ disponible: !!info.disponible, httpsUrl: info.httpsUrl });
+      } catch {
+        setInseguro({ disponible: false, httpsUrl: "" });
+      }
       return;
     }
     try {
@@ -124,6 +132,54 @@ export default function CamaraModal({ abierto, titulo, guia, onCaptura, onCerrar
           </select>
         )}
 
+        {inseguro ? (
+          <div className="rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-gray-800">
+            <p className="font-semibold text-amber-800 mb-2">
+              <i className="bi bi-shield-exclamation mr-1"></i>
+              Para usar la cámara hay que abrir la versión segura de CallX
+            </p>
+            {inseguro.disponible ? (
+              <>
+                <p className="mb-3 text-gray-700">
+                  El navegador solo permite la cámara en conexiones seguras (HTTPS).
+                  Esto se hace <strong>una sola vez</strong> en este equipo:
+                </p>
+                <ol className="list-decimal ml-5 space-y-2 mb-4">
+                  <li>
+                    Descarga el instalador y ábrelo (si el navegador pregunta, elige <em>Conservar</em>).
+                    Cuando Windows pregunte si quieres instalar el certificado, responde <strong>Sí</strong>.
+                  </li>
+                  <li>Cierra el navegador por completo y vuelve a abrirlo.</li>
+                  <li>Entra por la dirección segura (el instalador la abre solo al terminar).</li>
+                </ol>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <a
+                    href="/api/certificado?formato=bat"
+                    download
+                    className="flex-1 text-center bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-md font-medium"
+                  >
+                    <i className="bi bi-download mr-2"></i>Descargar instalador
+                  </a>
+                  <a
+                    href={`${inseguro.httpsUrl}${typeof window !== "undefined" ? window.location.pathname : ""}`}
+                    className="flex-1 text-center border border-emerald-600 text-emerald-700 hover:bg-emerald-50 py-2 rounded-md font-medium"
+                  >
+                    <i className="bi bi-lock-fill mr-2"></i>Ya lo instalé: abrir versión segura
+                  </a>
+                </div>
+                <p className="text-xs text-gray-500 mt-3">
+                  Mientras tanto puedes usar <strong>Subir imagen</strong>. En Firefox el certificado se importa aparte
+                  (Ajustes → Privacidad → Certificados).
+                </p>
+              </>
+            ) : (
+              <p className="text-gray-700">
+                La versión segura (HTTPS) no está activada en el servidor. Pide a TI que la configure
+                o usa <strong>Subir imagen</strong>.
+              </p>
+            )}
+          </div>
+        ) : (
         <div className="relative bg-black rounded-md overflow-hidden aspect-video flex items-center justify-center">
           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain" />
           {listo && (
@@ -137,24 +193,29 @@ export default function CamaraModal({ abierto, titulo, guia, onCaptura, onCerrar
           )}
           {error && <p className="absolute text-white text-sm text-center px-6">{error}</p>}
         </div>
+        )}
 
-        <p className="text-xs text-gray-500 mt-2">
-          {guia === "cedula"
-            ? "Encuadra el REVERSO de la cédula dentro del recuadro, con buena luz y sin reflejos."
-            : "Rostro de frente dentro del óvalo, bien iluminado y sin lentes oscuros."}
-        </p>
+        {!inseguro && (
+          <p className="text-xs text-gray-500 mt-2">
+            {guia === "cedula"
+              ? "Encuadra el REVERSO de la cédula dentro del recuadro, con buena luz y sin reflejos."
+              : "Rostro de frente dentro del óvalo, bien iluminado y sin lentes oscuros."}
+          </p>
+        )}
 
         <div className="flex gap-2 mt-3">
-          <button
-            type="button"
-            onClick={capturar}
-            disabled={!listo}
-            className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-md font-medium disabled:opacity-50"
-          >
-            <i className="bi bi-camera-fill mr-2"></i>Tomar foto
-          </button>
-          <button type="button" onClick={cerrar} className="px-4 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50">
-            Cancelar
+          {!inseguro && (
+            <button
+              type="button"
+              onClick={capturar}
+              disabled={!listo}
+              className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-md font-medium disabled:opacity-50"
+            >
+              <i className="bi bi-camera-fill mr-2"></i>Tomar foto
+            </button>
+          )}
+          <button type="button" onClick={cerrar} className={`px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 ${inseguro ? "ml-auto" : ""}`}>
+            {inseguro ? "Cerrar" : "Cancelar"}
           </button>
         </div>
       </div>
