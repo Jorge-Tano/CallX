@@ -5,6 +5,8 @@ import { useState, useEffect, useRef } from "react";
 import { Usuario } from "@/types/usuario";
 import * as XLSX from 'xlsx';
 import CameraInput from "./CameraInput";
+import CedulaInput from "./CedulaInput";
+import type { DatosCedula } from "@/lib/cedula/parse";
 
 interface UsuarioCreateModalProps {
   onCreate: (usuarios: Usuario[]) => Promise<void>;
@@ -33,6 +35,25 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
   const [departamentoPersonalizado, setDepartamentoPersonalizado] = useState(false);
   const [departamentos, setDepartamentos] = useState<{ groupId: number; nombre: string }[]>([]);
   const [foto, setFoto] = useState<string | null>(null);
+  // Campos llenados desde la cédula que conviene revisar (se resaltan)
+  const [camposRevisar, setCamposRevisar] = useState<Array<keyof UsuarioForm>>([]);
+
+  const aplicarCedula = (datos: DatosCedula) => {
+    setIndividualForm(prev => ({
+      ...prev,
+      numeroEmpleado: datos.documento,
+      nombre: `${datos.nombres} ${datos.apellidos}`.trim(),
+      genero: datos.sexo === "F" ? "Femenino" : datos.sexo === "M" ? "Masculino" : prev.genero,
+    }));
+    const revisar: Array<keyof UsuarioForm> = [];
+    if (datos.revisar.includes("documento")) revisar.push("numeroEmpleado");
+    if (datos.revisar.includes("nombres") || datos.revisar.includes("apellidos")) revisar.push("nombre");
+    if (datos.revisar.includes("sexo") || !datos.sexo) revisar.push("genero");
+    setCamposRevisar(revisar);
+  };
+
+  const claseRevisar = (campo: keyof UsuarioForm) =>
+    camposRevisar.includes(campo) ? " !border-amber-400 bg-amber-50" : "";
 
   // Traer la lista de departamentos desde la base de datos, no del código,
   // para que cualquier grupo nuevo (creado desde aquí o directo en el
@@ -81,6 +102,8 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
   // Manejar cambios en formulario individual
   const handleIndividualChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setIndividualForm({ ...individualForm, [e.target.name]: e.target.value });
+    // Al corregir un campo marcado, se quita el resaltado
+    setCamposRevisar(prev => prev.filter(c => c !== e.target.name));
   };
 
   // Manejar cambios en formulario masivo
@@ -262,6 +285,7 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
       });
       setDepartamentoPersonalizado(false);
       setFoto(null);
+      setCamposRevisar([]);
 
       setUsuariosMasivos([
         { nombre: "", genero: "", numeroEmpleado: "", departamento: defaultDepartamento || "" }
@@ -411,15 +435,16 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
                 <form onSubmit={crearIndividual} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="md:col-span-2">
                     <h3 className="text-lg font-medium text-gray-700 mb-3">Información del Usuario</h3>
+                    <CedulaInput onDatos={aplicarCedula} disabled={loading} />
                   </div>
 
                   <input
                     name="numeroEmpleado"
                     type="text"
-                    placeholder="Número de empleado *"
+                    placeholder="Número de empleado (cédula) *"
                     value={individualForm.numeroEmpleado}
                     onChange={handleIndividualChange}
-                    className="border border-gray-300 p-2 rounded-md text-black focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
+                    className={"border border-gray-300 p-2 rounded-md text-black focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all" + claseRevisar("numeroEmpleado")}
                     required
                     disabled={loading}
                   />
@@ -428,7 +453,7 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
                     name="genero"
                     value={individualForm.genero}
                     onChange={handleIndividualChange}
-                    className="border border-gray-300 p-2 rounded-md text-black focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
+                    className={"border border-gray-300 p-2 rounded-md text-black focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all" + claseRevisar("genero")}
                     required
                     disabled={loading}
                   >
@@ -444,7 +469,7 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
                     placeholder="Nombre completo *"
                     value={individualForm.nombre}
                     onChange={handleIndividualChange}
-                    className="border border-gray-300 p-2 rounded-md text-black focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all md:col-span-2"
+                    className={"border border-gray-300 p-2 rounded-md text-black focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all md:col-span-2" + claseRevisar("nombre")}
                     required
                     disabled={loading}
                   />
