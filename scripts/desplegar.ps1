@@ -87,6 +87,14 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# 5. Reiniciar
-pm2 restart $Pm2App
+# 5. Reiniciar. Si cambio la configuracion de pm2 (script, puertos, variables),
+# "pm2 restart" no la toma: hay que volver a registrar la app.
+if ($archivos -contains "ecosystem.config.cjs") {
+    Write-Host "Cambio ecosystem.config.cjs: se vuelve a registrar la app en pm2" -ForegroundColor Cyan
+    pm2 delete $Pm2App
+    pm2 start ecosystem.config.cjs
+    pm2 save
+} else {
+    pm2 restart $Pm2App
+}
 Write-Host "Desplegado $($despues.Substring(0,7))." -ForegroundColor Green

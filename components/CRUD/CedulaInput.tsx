@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import type { DatosCedula } from "@/lib/cedula/parse";
+import CamaraModal from "./CamaraModal";
 
 // Botón "Cargar desde cédula": lee una foto o PDF de la cédula en el navegador
 // y entrega los datos al formulario. La imagen no se guarda ni se envía.
@@ -20,12 +21,22 @@ type Estado =
 export default function CedulaInput({ onDatos, disabled }: CedulaInputProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [estado, setEstado] = useState<Estado>({ tipo: "inactivo" });
+  const [camaraAbierta, setCamaraAbierta] = useState(false);
 
   const handleArchivo = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const archivo = e.target.files?.[0];
     e.target.value = "";
-    if (!archivo) return;
+    if (archivo) await procesar(archivo);
+  };
 
+  const handleCaptura = (canvas: HTMLCanvasElement) => {
+    setCamaraAbierta(false);
+    canvas.toBlob(blob => {
+      if (blob) procesar(new File([blob], "cedula.jpg", { type: "image/jpeg" }));
+    }, "image/jpeg", 0.95);
+  };
+
+  const procesar = async (archivo: File) => {
     setEstado({ tipo: "leyendo", mensaje: "Preparando..." });
     try {
       // Carga diferida: las librerías solo se descargan al usar el botón
@@ -69,6 +80,22 @@ export default function CedulaInput({ onDatos, disabled }: CedulaInputProps) {
           </>
         )}
       </button>
+      <button
+        type="button"
+        onClick={() => setCamaraAbierta(true)}
+        disabled={disabled || leyendo}
+        title="Tomar foto de la cédula con la cámara"
+        className="shrink-0 bg-white border border-emerald-600 text-emerald-700 hover:bg-emerald-50 px-3 py-2 rounded-md text-sm disabled:opacity-50"
+      >
+        <i className="bi bi-camera-fill mr-1"></i>Cámara
+      </button>
+      <CamaraModal
+        abierto={camaraAbierta}
+        titulo="Foto de la cédula (reverso)"
+        guia="cedula"
+        onCaptura={handleCaptura}
+        onCerrar={() => setCamaraAbierta(false)}
+      />
       <input
         ref={inputRef}
         type="file"

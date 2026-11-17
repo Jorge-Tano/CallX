@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import CamaraModal from "./CamaraModal";
 
 // Captura o carga una foto de rostro y la entrega como data URL JPEG
 // ("data:image/jpeg;base64,...") ya reducida para los terminales Hikvision,
@@ -41,54 +42,17 @@ function aJpegReducido(fuente: CanvasImageSource, ancho: number, alto: number): 
 }
 
 export default function CameraInput({ value, onPhoto, disabled }: CameraInputProps) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [camaraAbierta, setCamaraAbierta] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const detenerCamara = () => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
+  const handleCaptura = (canvas: HTMLCanvasElement) => {
     setCamaraAbierta(false);
-  };
-
-  // Soltar la cámara si se cierra el modal con ella encendida
-  useEffect(() => () => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-  }, []);
-
-  const abrirCamara = async () => {
-    setError(null);
-    if (!navigator.mediaDevices?.getUserMedia) {
-      // Los navegadores solo exponen la cámara en HTTPS o localhost
-      setError("La cámara no está disponible en esta conexión (requiere HTTPS). Usa 'Subir imagen'.");
-      return;
-    }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
-      });
-      streamRef.current = stream;
-      setCamaraAbierta(true);
-      // El <video> se monta tras el render
-      requestAnimationFrame(() => {
-        if (videoRef.current) videoRef.current.srcObject = stream;
-      });
-    } catch {
-      setError("No se pudo acceder a la cámara. Revisa los permisos del navegador.");
-    }
-  };
-
-  const tomarFoto = () => {
-    const video = videoRef.current;
-    if (!video || !video.videoWidth) return;
-    try {
-      onPhoto(aJpegReducido(video, video.videoWidth, video.videoHeight));
+      onPhoto(aJpegReducido(canvas, canvas.width, canvas.height));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al capturar la foto");
     }
-    detenerCamara();
   };
 
   const handleArchivo = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -120,11 +84,9 @@ export default function CameraInput({ value, onPhoto, disabled }: CameraInputPro
 
   return (
     <div className="flex flex-col sm:flex-row gap-4 items-start">
-      {/* Vista previa / cámara */}
+      {/* Vista previa */}
       <div className="w-[150px] h-[200px] rounded-lg border border-gray-300 bg-gray-50 overflow-hidden flex items-center justify-center shrink-0">
-        {camaraAbierta ? (
-          <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-        ) : value ? (
+        {value ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={value} alt="Foto del usuario" className="w-full h-full object-cover" />
         ) : (
@@ -133,41 +95,35 @@ export default function CameraInput({ value, onPhoto, disabled }: CameraInputPro
       </div>
 
       <div className="flex flex-col gap-2">
-        {camaraAbierta ? (
-          <>
-            <button type="button" onClick={tomarFoto} disabled={disabled}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-md text-sm disabled:opacity-50">
-              <i className="bi bi-camera-fill mr-2"></i>Tomar foto
-            </button>
-            <button type="button" onClick={detenerCamara}
-              className="border border-gray-300 text-gray-700 px-4 py-2 rounded-md text-sm hover:bg-gray-50">
-              Cancelar
-            </button>
-          </>
-        ) : (
-          <>
-            <button type="button" onClick={abrirCamara} disabled={disabled}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-md text-sm disabled:opacity-50">
-              <i className="bi bi-camera-fill mr-2"></i>{value ? "Volver a tomar" : "Usar cámara"}
-            </button>
-            <button type="button" onClick={() => fileRef.current?.click()} disabled={disabled}
-              className="border border-gray-300 text-gray-700 px-4 py-2 rounded-md text-sm hover:bg-gray-50 disabled:opacity-50">
-              <i className="bi bi-upload mr-2"></i>Subir imagen
-            </button>
-            {value && (
-              <button type="button" onClick={() => onPhoto(null)} disabled={disabled}
-                className="text-red-600 text-sm hover:underline text-left disabled:opacity-50">
-                Quitar foto
-              </button>
-            )}
-          </>
+        <button type="button" onClick={() => { setError(null); setCamaraAbierta(true); }} disabled={disabled}
+          className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-md text-sm disabled:opacity-50">
+          <i className="bi bi-camera-fill mr-2"></i>{value ? "Volver a tomar" : "Usar cámara"}
+        </button>
+        <button type="button" onClick={() => fileRef.current?.click()} disabled={disabled}
+          className="border border-gray-300 text-gray-700 px-4 py-2 rounded-md text-sm hover:bg-gray-50 disabled:opacity-50">
+          <i className="bi bi-upload mr-2"></i>Subir imagen
+        </button>
+        {value && (
+          <button type="button" onClick={() => onPhoto(null)} disabled={disabled}
+            className="text-red-600 text-sm hover:underline text-left disabled:opacity-50">
+            Quitar foto
+          </button>
         )}
         <input ref={fileRef} type="file" accept="image/*" onChange={handleArchivo} className="hidden" />
         <p className="text-xs text-gray-500 max-w-xs">
-          Opcional. Rostro de frente, bien iluminado y sin lentes oscuros. Se envía a los biométricos.
+          Opcional. Rostro de frente, bien iluminado y sin lentes oscuros. Si un equipo rechaza
+          la foto, el usuario no se crea en ninguno.
         </p>
         {error && <p className="text-xs text-red-600 max-w-xs">{error}</p>}
       </div>
+
+      <CamaraModal
+        abierto={camaraAbierta}
+        titulo="Foto del rostro"
+        guia="rostro"
+        onCaptura={handleCaptura}
+        onCerrar={() => setCamaraAbierta(false)}
+      />
     </div>
   );
 }

@@ -1,165 +1,24 @@
 // app/api/hikvision/users/create/route.js
+//
+// Alta de usuarios en los terminales Hikvision, "todo o nada" por usuario:
+//   1. Verifica que la cédula no exista en la base de datos ni en ningún equipo.
+//   2. Crea el usuario en cada equipo y, si hay foto, sube el rostro.
+//   3. Si algo falla en cualquier equipo, borra lo que se alcanzó a crear.
+//   4. Solo si todo salió bien, lo guarda en la base de datos.
 import { NextResponse } from 'next/server';
-import DigestFetch from 'digest-fetch';
 import { query } from '@/lib/db/usuarios/database';
 import { obtenerOCrearGroupIdPorNombre } from '@/lib/db/departamentos';
+import {
+  DISPOSITIVOS, buscarUsuario, crearUsuario, subirRostro, borrarUsuario,
+} from '@/lib/hikvision/dispositivos';
 
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
-const DEVICES = [
-  {
-    ip: process.env.HIKVISION_IP1,
-    username: process.env.HIKUSER,
-    password: process.env.HIKPASS
-  },
-  {
-    ip: process.env.HIKVISION_IP2,
-    username: process.env.HIKUSER,
-    password: process.env.HIKPASS
-  }
-].filter(device => device.ip);
-
-// Guarda el usuario recién creado directamente en la base de datos.
-// No dependemos de una llamada HTTP a nuestro propio servidor porque el puerto
-// real (3005 en dev, 3001 en start) no coincide con el localhost:3000 asumido antes,
-// lo que hacía que el insert nunca se ejecutara.
-async function insertUserInDatabase(user) {
-  const genero = user.genero === 'Femenino' ? 'Femenino' : (user.genero === 'Masculino' ? 'Masculino' : 'No especificado');
-
-  const upsertQuery = `
-    MERGE hikvision_users AS target
-    USING (SELECT $1 AS employee_no) AS source
-    ON target.employee_no = source.employee_no
-    WHEN MATCHED THEN
-      UPDATE SET
-        nombre             = $2,
-        departamento       = $3,
-        genero             = $4,
-        tipo_usuario       = $5,
-        estado             = $6,
-        fecha_modificacion = GETDATE()
-    WHEN NOT MATCHED THEN
-      INSERT (employee_no, nombre, departamento, genero, tipo_usuario, estado, fecha_creacion, fecha_modificacion)
-      VALUES ($1, $2, $3, $4, $5, $6, GETDATE(), GETDATE());
-  `;
-
-  await query(upsertQuery, [
-    user.numeroEmpleado.toString(),
-    user.nombre,
-    user.departamento,
-    genero,
-    'Normal',
-    'Activo'
-  ]);
-}
-
-// Función para crear un usuario en un dispositivo
-async function createUserOnDevice(device, userData, departmentId) {
-  const client = new DigestFetch(device.username, device.password, {
-    disableRetry: false,
-    algorithm: 'MD5'
-  });
-
-  let gender = 'male';
-  if (userData.genero === 'Femenino') gender = 'female';
-
-  const payload = {
-    UserInfo: {
-      employeeNo: userData.numeroEmpleado.toString(),
-      name: userData.nombre,
-      userType: "normal",
-      groupId: departmentId,
-      gender: gender,
-      Valid: {
-        enable: true,
-        beginTime: "2025-11-15T00:00:00",
-        endTime: "2036-12-31T23:59:59",
-        timeType: "local"
-      },
-      doorRight: "1",
-      RightPlan: [
-        {
-          doorNo: 1,
-          planTemplateNo: "1"
-        }
-      ],
-      checkUser: true,
-      closeDelayEnabled: false
-    }
-  };
-
-  const url = `https://${device.ip}/ISAPI/AccessControl/UserInfo/Record?format=json`;
-  
-  try {
-    const response = await client.fetch(url, {
-      method: "POST",
-      body: JSON.stringify(payload),
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-      }
-    });
-
-    const responseText = await response.text();
-
-    if (responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<html')) {
-      return {
-        success: false,
-        error: `El dispositivo respondió con una página de error HTML`,
-        deviceIp: device.ip
-      };
-    }
-
-    let parsedResponse;
-    try {
-      parsedResponse = JSON.parse(responseText);
-    } catch (e) {
-      return {
-        success: false,
-        error: `Respuesta no es JSON válido: ${responseText.substring(0, 200)}`,
-        deviceIp: device.ip
-      };
-    }
-
-    if (response.ok) {
-      return {
-        success: true,
-        deviceIp: device.ip,
-        response: parsedResponse
-      };
-    } else {
-      return {
-        success: false,
-        error: `Error ${response.status}: ${responseText}`,
-        deviceIp: device.ip,
-        response: responseText
-      };
-    }
-  } catch (error) {
-    return {
-      success: false,
-      error: error.message,
-      deviceIp: device.ip
-    };
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Foto de rostro
-// ---------------------------------------------------------------------------
-// Los terminales de reconocimiento facial guardan la cara en una biblioteca
-// (FDLib) asociada al usuario por FPID = employeeNo. El usuario debe existir
-// antes en el dispositivo, por eso se sube después de crear el UserInfo.
 const FACE_MAX_BYTES = 200 * 1024;
-const FACE_LIB_ID = process.env.HIKVISION_FACE_LIB_ID || '1';
 
-// Convierte "data:image/jpeg;base64,..." en Buffer y valida tipo y tamaño.
+// "data:image/jpeg;base64,..." -> Buffer, validando tipo y tamaño
 function decodeFoto(foto) {
   if (!foto) return null;
   const match = /^data:image\/jpe?g;base64,([A-Za-z0-9+/=]+)$/.exec(foto);
-  if (!match) {
-    throw new Error('La foto debe ser una imagen JPEG');
-  }
+  if (!match) throw new Error('La foto debe ser una imagen JPEG');
   const buffer = Buffer.from(match[1], 'base64');
   if (buffer.length > FACE_MAX_BYTES) {
     throw new Error(`La foto pesa ${Math.round(buffer.length / 1024)} KB; el máximo es ${FACE_MAX_BYTES / 1024} KB`);
@@ -167,228 +26,228 @@ function decodeFoto(foto) {
   return buffer;
 }
 
-// El cuerpo multipart se arma como Buffer (no FormData) para que digest-fetch
-// pueda reenviarlo tal cual tras el desafío 401 de la autenticación Digest.
-function buildFaceMultipart(employeeNo, imageBuffer) {
-  const boundary = `----CallXFace${Date.now().toString(16)}`;
-  const metadata = JSON.stringify({
-    faceLibType: 'blackFD',
-    FDID: FACE_LIB_ID,
-    FPID: employeeNo.toString()
-  });
-  const head = Buffer.from(
-    `--${boundary}\r\n` +
-    `Content-Disposition: form-data; name="FaceDataRecord"\r\n` +
-    `Content-Type: application/json\r\n\r\n` +
-    `${metadata}\r\n` +
-    `--${boundary}\r\n` +
-    `Content-Disposition: form-data; name="img"; filename="face.jpg"\r\n` +
-    `Content-Type: image/jpeg\r\n\r\n`
+// ---------------------------------------------------------------------------
+// Base de datos
+// ---------------------------------------------------------------------------
+let columnaFechaNacimiento = null; // null = sin verificar
+
+async function asegurarColumnaFechaNacimiento() {
+  if (columnaFechaNacimiento !== null) return columnaFechaNacimiento;
+  try {
+    await query(`
+      IF COL_LENGTH('hikvision_users', 'fecha_nacimiento') IS NULL
+        ALTER TABLE hikvision_users ADD fecha_nacimiento DATE NULL
+    `);
+    columnaFechaNacimiento = true;
+  } catch (e) {
+    console.warn('No se pudo agregar la columna fecha_nacimiento:', e.message);
+    columnaFechaNacimiento = false;
+  }
+  return columnaFechaNacimiento;
+}
+
+async function buscarEnBaseDeDatos(employeeNo) {
+  const r = await query(
+    `SELECT TOP 1 employee_no, nombre, departamento FROM hikvision_users WHERE employee_no = $1`,
+    [String(employeeNo)]
   );
-  const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+  return r.rows[0] || null;
+}
+
+async function insertarEnBaseDeDatos(user) {
+  const genero = ['Femenino', 'Masculino'].includes(user.genero) ? user.genero : 'No especificado';
+  const fecha = /^\d{4}-\d{2}-\d{2}$/.test(user.fechaNacimiento || '') ? user.fechaNacimiento : null;
+  const conFecha = fecha && await asegurarColumnaFechaNacimiento();
+
+  await query(`
+    MERGE hikvision_users AS target
+    USING (SELECT $1 AS employee_no) AS source
+    ON target.employee_no = source.employee_no
+    WHEN MATCHED THEN
+      UPDATE SET nombre = $2, departamento = $3, genero = $4, tipo_usuario = $5, estado = $6,
+        ${conFecha ? 'fecha_nacimiento = $7,' : ''} fecha_modificacion = GETDATE()
+    WHEN NOT MATCHED THEN
+      INSERT (employee_no, nombre, departamento, genero, tipo_usuario, estado,
+        ${conFecha ? 'fecha_nacimiento,' : ''} fecha_creacion, fecha_modificacion)
+      VALUES ($1, $2, $3, $4, $5, $6, ${conFecha ? '$7,' : ''} GETDATE(), GETDATE());
+  `, [
+    String(user.numeroEmpleado), user.nombre, user.departamento, genero, 'Normal', 'Activo',
+    ...(conFecha ? [fecha] : []),
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// Verificación previa (también la usa el formulario vía GET)
+// ---------------------------------------------------------------------------
+async function verificarExistencia(employeeNo) {
+  const enBase = await buscarEnBaseDeDatos(employeeNo);
+  const equipos = await Promise.all(DISPOSITIVOS.map(async d => ({ ip: d.ip, ...(await buscarUsuario(d, employeeNo)) })));
   return {
-    body: Buffer.concat([head, imageBuffer, tail]),
-    contentType: `multipart/form-data; boundary=${boundary}`
+    enBase,
+    enEquipos: equipos.filter(e => e.ok && e.existe),
+    sinRespuesta: equipos.filter(e => !e.ok),
   };
 }
 
-async function sendFace(client, url, method, employeeNo, imageBuffer) {
-  const { body, contentType } = buildFaceMultipart(employeeNo, imageBuffer);
-  const response = await client.fetch(url, {
-    method,
-    body,
-    headers: { 'Content-Type': contentType, 'Accept': 'application/json' }
-  });
-  const text = await response.text();
-  let parsed = null;
-  try { parsed = JSON.parse(text); } catch { /* respuesta no JSON */ }
-  const ok = response.ok && (!parsed || parsed.statusCode === undefined || parsed.statusCode === 1);
-  return { ok, parsed, text, status: response.status };
+function mensajeExistencia(employeeNo, v) {
+  const partes = [];
+  if (v.enBase) partes.push(`la base de datos (${v.enBase.nombre}${v.enBase.departamento ? `, ${v.enBase.departamento}` : ''})`);
+  for (const e of v.enEquipos) partes.push(`el equipo ${e.ip}${e.nombre ? ` (${e.nombre})` : ''}`);
+  return `La cédula ${employeeNo} ya está registrada en ${partes.join(' y ')}. Usa "Editar" en lugar de crear.`;
 }
 
-async function uploadFaceToDevice(device, employeeNo, imageBuffer) {
-  const client = new DigestFetch(device.username, device.password, {
-    disableRetry: false,
-    algorithm: 'MD5'
-  });
-  const base = `https://${device.ip}/ISAPI/Intelligent/FDLib`;
-
+export async function GET(request) {
+  const employeeNo = new URL(request.url).searchParams.get('employeeNo')?.trim();
+  if (!employeeNo || !/^\d+$/.test(employeeNo)) {
+    return NextResponse.json({ success: false, error: 'employeeNo inválido' }, { status: 400 });
+  }
   try {
-    let result = await sendFace(client, `${base}/FaceDataRecord?format=json`, 'POST', employeeNo, imageBuffer);
-
-    // Si el usuario ya tenía una cara (p. ej. un reintento), se reemplaza.
-    const sub = result.parsed?.subStatusCode || '';
-    if (!result.ok && /exist/i.test(sub)) {
-      result = await sendFace(client, `${base}/FDSetUp?format=json`, 'PUT', employeeNo, imageBuffer);
-    }
-
-    if (result.ok) {
-      return { success: true };
-    }
-
-    const detalle = result.parsed
-      ? `${result.parsed.subStatusCode || result.parsed.statusString || 'error'}${result.parsed.errorMsg ? ` (${result.parsed.errorMsg})` : ''}`
-      : `HTTP ${result.status}: ${result.text.substring(0, 200)}`;
-    return { success: false, error: describirErrorCara(detalle) };
+    const v = await verificarExistencia(employeeNo);
+    const existe = !!v.enBase || v.enEquipos.length > 0;
+    return NextResponse.json({
+      success: true,
+      existe,
+      mensaje: existe ? mensajeExistencia(employeeNo, v) : null,
+      sinRespuesta: v.sinRespuesta.map(e => e.ip),
+    });
   } catch (error) {
-    return { success: false, error: error.message };
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
 
-// Traduce los códigos más comunes del dispositivo a algo entendible.
-function describirErrorCara(detalle) {
-  const d = detalle.toLowerCase();
-  if (d.includes('modelingfailed') || d.includes('facemodel') || d.includes('lowscore')) {
-    return `El equipo no reconoció un rostro válido en la foto (${detalle}). Usa una foto de frente y bien iluminada.`;
+// ---------------------------------------------------------------------------
+// Alta "todo o nada" de un usuario
+// ---------------------------------------------------------------------------
+async function crearTodoONada(user) {
+  const resultado = {
+    userIndex: user.index,
+    nombre: user.nombre,
+    numeroEmpleado: user.numeroEmpleado,
+    departamento: user.departamento,
+    deviceResults: [],
+    success: false,
+    error: null,
+  };
+
+  // 1. Verificación previa
+  const v = await verificarExistencia(user.numeroEmpleado);
+  if (v.sinRespuesta.length) {
+    resultado.error = `No se pudo verificar en ${v.sinRespuesta.map(e => `${e.ip} (${e.error})`).join(', ')}. ` +
+      'No se creó nada para no dejar el usuario a medias.';
+    return resultado;
   }
-  if (d.includes('picturesize') || d.includes('toolarge') || d.includes('oversize')) {
-    return `La foto es demasiado grande para el equipo (${detalle}).`;
+  if (v.enBase || v.enEquipos.length) {
+    resultado.error = mensajeExistencia(user.numeroEmpleado, v);
+    return resultado;
   }
-  if (d.includes('notsupport') || d.includes('invalidoperation')) {
-    return `El equipo no admite carga de rostros por esta vía (${detalle}).`;
+
+  // 2. Crear en cada equipo (+ rostro)
+  const creados = [];
+  let fallo = null;
+  for (const device of DISPOSITIVOS) {
+    const r = { deviceIp: device.ip, success: false };
+    resultado.deviceResults.push(r);
+
+    const alta = await crearUsuario(device, user, user.departmentId);
+    if (!alta.ok) { r.error = alta.error; fallo = `${device.ip}: ${alta.error}`; break; }
+    creados.push(device);
+
+    if (user.fotoBuffer) {
+      const rostro = await subirRostro(device, user.numeroEmpleado, user.fotoBuffer);
+      r.face = rostro.ok ? { success: true } : { success: false, error: rostro.error };
+      if (!rostro.ok) { r.error = `Foto: ${rostro.error}`; fallo = `${device.ip} (foto): ${rostro.error}`; break; }
+    }
+    r.success = true;
   }
-  return detalle;
+
+  // 3. Deshacer si algo falló
+  if (fallo) {
+    const deshechos = await Promise.all(creados.map(async d => ({ ip: d.ip, ...(await borrarUsuario(d, user.numeroEmpleado)) })));
+    const sinDeshacer = deshechos.filter(d => !d.ok);
+    resultado.error = `No se creó el usuario. ${fallo}` +
+      (sinDeshacer.length
+        ? ` ATENCIÓN: no se pudo deshacer en ${sinDeshacer.map(d => d.ip).join(', ')}; revisa ese equipo y borra la cédula ${user.numeroEmpleado} a mano.`
+        : creados.length ? ' Se deshizo lo creado en los demás equipos.' : '');
+    return resultado;
+  }
+
+  // 4. Guardar en la base de datos
+  resultado.success = true;
+  try {
+    await insertarEnBaseDeDatos(user);
+    resultado.savedToDatabase = true;
+  } catch (dbError) {
+    console.error(`Error guardando ${user.numeroEmpleado} en la base de datos:`, dbError);
+    resultado.savedToDatabase = false;
+    resultado.databaseError = dbError.message;
+  }
+  return resultado;
 }
 
 export async function POST(request) {
   try {
     const data = await request.json();
-    // No volcar la foto (base64) al log
-    const resumenLog = (Array.isArray(data) ? data : [data]).map(({ foto, ...rest }) => ({ ...rest, foto: foto ? '(adjunta)' : undefined }));
-    console.log('🔵 DATOS RECIBIDOS DEL FRONTEND:', resumenLog);
-
-    // Verificar si es un array de usuarios o un solo usuario
     const users = Array.isArray(data) ? data : [data];
-    console.log(`📋 PROCESANDO ${users.length} USUARIO(S)`);
+    console.log('🔵 Alta de usuarios:', users.map(({ foto, ...u }) => ({ ...u, foto: foto ? '(adjunta)' : undefined })));
 
-    // Validar todos los usuarios
+    if (DISPOSITIVOS.length === 0) {
+      return NextResponse.json({ success: false, error: 'No hay equipos configurados' }, { status: 500 });
+    }
+
     const validationErrors = [];
-    const validatedUsers = [];
-
+    const validados = [];
     for (let i = 0; i < users.length; i++) {
       const user = users[i];
-      
-      if (!user.numeroEmpleado || !user.nombre || !user.departamento) {
-        validationErrors.push(`Usuario ${i + 1}: numeroEmpleado, nombre y departamento son requeridos`);
+      const numero = String(user.numeroEmpleado ?? '').trim();
+      if (!numero || !user.nombre || !user.departamento) {
+        validationErrors.push(`Usuario ${i + 1}: número de empleado, nombre y departamento son requeridos`);
         continue;
       }
-
+      if (!/^\d+$/.test(numero)) {
+        validationErrors.push(`Usuario ${i + 1}: el número de empleado (cédula) solo puede tener dígitos`);
+        continue;
+      }
       let fotoBuffer = null;
       try {
         fotoBuffer = decodeFoto(user.foto);
-      } catch (fotoError) {
-        validationErrors.push(`Usuario ${i + 1}: ${fotoError.message}`);
+      } catch (e) {
+        validationErrors.push(`Usuario ${i + 1}: ${e.message}`);
         continue;
       }
-
-      validatedUsers.push({
+      validados.push({
         ...user,
+        numeroEmpleado: numero,
+        nombre: String(user.nombre).trim(),
         fotoBuffer,
-        // Busca el grupo por nombre en la tabla de departamentos; si el nombre
-        // es nuevo, se crea ahí mismo con un groupId propio (los dispositivos
-        // no distinguen entre grupos por permisos, todos comparten el mismo
-        // horario/puerta, así que crear uno nuevo es seguro).
         departmentId: await obtenerOCrearGroupIdPorNombre(user.departamento),
-        index: i + 1
+        index: i + 1,
       });
     }
 
     if (validationErrors.length > 0) {
       return NextResponse.json(
-        {
-          success: false,
-          error: "Errores de validación",
-          details: validationErrors
-        },
+        { success: false, error: 'Errores de validación', details: validationErrors },
         { status: 400 }
       );
     }
 
-    // Procesar cada usuario en cada dispositivo
     const results = [];
-    const summary = {
-      totalUsers: validatedUsers.length,
-      totalDevices: DEVICES.length,
-      successfulUsers: 0,
-      failedUsers: 0
-    };
-
-    for (const user of validatedUsers) {
-      const userResults = {
-        userIndex: user.index,
-        nombre: user.nombre,
-        numeroEmpleado: user.numeroEmpleado,
-        departamento: user.departamento,
-        deviceResults: [],
-        success: false
-      };
-
-      let deviceSuccessCount = 0;
-
-      for (const device of DEVICES) {
-        
-        const deviceResult = await createUserOnDevice(device, user, user.departmentId);
-
-        // La foto es opcional y su fallo no invalida la creación del usuario.
-        let face;
-        if (deviceResult.success && user.fotoBuffer) {
-          face = await uploadFaceToDevice(device, user.numeroEmpleado, user.fotoBuffer);
-        }
-
-        userResults.deviceResults.push({
-          deviceIp: device.ip,
-          success: deviceResult.success,
-          error: deviceResult.error,
-          response: deviceResult.response,
-          face
-        });
-
-        if (deviceResult.success) {
-          deviceSuccessCount++;
-        }
-      }
-
-      userResults.success = deviceSuccessCount === DEVICES.length;
-
-      if (userResults.success) {
-        summary.successfulUsers++;
-
-        try {
-          await insertUserInDatabase(user);
-          userResults.savedToDatabase = true;
-        } catch (dbError) {
-          console.error(`💥 Error guardando usuario ${user.numeroEmpleado} en la base de datos:`, dbError);
-          userResults.savedToDatabase = false;
-          userResults.databaseError = dbError.message;
-        }
-      } else {
-        summary.failedUsers++;
-      }
-
-      results.push(userResults);
+    for (const user of validados) {
+      results.push(await crearTodoONada(user));
     }
 
-    const finalResult = {
-      success: summary.failedUsers === 0,
-      summary,
+    const exitosos = results.filter(r => r.success).length;
+    const fallidos = results.length - exitosos;
+    return NextResponse.json({
+      success: fallidos === 0,
+      summary: { totalUsers: results.length, totalDevices: DISPOSITIVOS.length, successfulUsers: exitosos, failedUsers: fallidos },
       results,
-      message: summary.failedUsers === 0
-        ? `✅ ${summary.successfulUsers} usuario(s) creado(s) exitosamente en todos los dispositivos`
-        : `⚠️ ${summary.successfulUsers} exitoso(s), ${summary.failedUsers} fallido(s)`
-    };
-
-    console.log('🎯 RESULTADO FINAL:', finalResult);
-
-    return NextResponse.json(finalResult);
-
+      message: fallidos === 0
+        ? `✅ ${exitosos} usuario(s) creado(s) en todos los equipos`
+        : `⚠️ ${exitosos} creado(s), ${fallidos} sin crear`,
+    });
   } catch (error) {
-    console.error('💥 ERROR GENERAL EN ENDPOINT:', error);
-    return NextResponse.json(
-      {
-        success: false,
-        error: error.message
-      },
-      { status: 500 }
-    );
+    console.error('💥 Error en alta de usuarios:', error);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

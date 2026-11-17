@@ -42,3 +42,6 @@ next-env.d.ts
 
 # logs locales
 /logs/
+
+# certificados HTTPS locales
+/certs/
