@@ -3,7 +3,7 @@ module.exports = {
     {
       name: "callx-next-prod",
       script: "node_modules/next/dist/bin/next",
-      args: "start -p 3001",
+      args: "start -p 3600",
       cwd: "C:/proyectos/callx",
       interpreter: "node",
       autorestart: true,
