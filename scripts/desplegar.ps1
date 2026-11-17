@@ -54,7 +54,7 @@ if ($depsCambiaron) {
     Write-Host "Cambiaron las dependencias: npm ci" -ForegroundColor Cyan
     # npm ci borra node_modules; en Windows falla si la app tiene archivos abiertos
     pm2 stop $Pm2App
-    npm ci
+    npm ci --include=dev
     if ($LASTEXITCODE -ne 0) { Write-Host "npm ci fallo" -ForegroundColor Red; exit 1 }
 }
 
@@ -66,7 +66,7 @@ npm run build
 if ($LASTEXITCODE -ne 0) {
     Write-Host "La compilacion fallo. Volviendo a la version anterior ($($antes.Substring(0,7)))." -ForegroundColor Red
     Invoke-Git reset --hard $antes
-    if ($depsCambiaron) { npm ci }
+    if ($depsCambiaron) { npm ci --include=dev }
     npm run build
     pm2 restart $Pm2App
     exit 1
