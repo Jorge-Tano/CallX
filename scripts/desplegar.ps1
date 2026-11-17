@@ -8,7 +8,7 @@
 #      (para no pisarlos; primero hay que decidir que hacer con ellos).
 #   2. Baja los cambios de origin/main (solo avance rapido, sin merges).
 #   3. Si cambio package-lock.json, ejecuta "npm ci".
-#   4. Compila. Si falla, vuelve al commit anterior y no reinicia nada.
+#   4. Compila. Si falla, vuelve al commit anterior y levanta esa version.
 #   5. Reinicia pm2.
 
 param(
@@ -49,19 +49,26 @@ git log --oneline "$antes..$despues"
 
 # 3. Dependencias
 $archivos = git diff --name-only $antes $despues
-if ($archivos -contains "package-lock.json" -or $archivos -contains "package.json") {
+$depsCambiaron = ($archivos -contains "package-lock.json") -or ($archivos -contains "package.json")
+if ($depsCambiaron) {
     Write-Host "Cambiaron las dependencias: npm ci" -ForegroundColor Cyan
+    # npm ci borra node_modules; en Windows falla si la app tiene archivos abiertos
+    pm2 stop $Pm2App
     npm ci
     if ($LASTEXITCODE -ne 0) { Write-Host "npm ci fallo" -ForegroundColor Red; exit 1 }
 }
 
 # 4. Compilar
 Write-Host "Compilando..." -ForegroundColor Cyan
+# next build debe correr en modo produccion aunque la consola tenga otro NODE_ENV
+$env:NODE_ENV = "production"
 npm run build
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "La compilacion fallo. Volviendo a $($antes.Substring(0,7)) sin reiniciar la app." -ForegroundColor Red
+    Write-Host "La compilacion fallo. Volviendo a la version anterior ($($antes.Substring(0,7)))." -ForegroundColor Red
     Invoke-Git reset --hard $antes
+    if ($depsCambiaron) { npm ci }
     npm run build
+    pm2 restart $Pm2App
     exit 1
 }
 

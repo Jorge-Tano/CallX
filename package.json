@@ -16,7 +16,7 @@
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "digest-fetch": "^3.1.1",
     "mssql": "^11.0.1",
-    "next": "^16.0.3",
+    "next": "^16.0.11",
     "next-auth": "^4.24.13",
     "node-fetch": "^3.3.2",
     "react": "19.2.0",
@@ -32,7 +32,7 @@
     "baseline-browser-mapping": "^2.9.11",
     "drizzle-orm": "^0.44.7",
     "eslint": "^9",
-    "eslint-config-next": "^16.0.3",
+    "eslint-config-next": "^16.0.11",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
