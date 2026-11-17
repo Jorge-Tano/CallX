@@ -144,10 +144,118 @@ async function createUserOnDevice(device, userData, departmentId) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Foto de rostro
+// ---------------------------------------------------------------------------
+// Los terminales de reconocimiento facial guardan la cara en una biblioteca
+// (FDLib) asociada al usuario por FPID = employeeNo. El usuario debe existir
+// antes en el dispositivo, por eso se sube después de crear el UserInfo.
+const FACE_MAX_BYTES = 200 * 1024;
+const FACE_LIB_ID = process.env.HIKVISION_FACE_LIB_ID || '1';
+
+// Convierte "data:image/jpeg;base64,..." en Buffer y valida tipo y tamaño.
+function decodeFoto(foto) {
+  if (!foto) return null;
+  const match = /^data:image\/jpe?g;base64,([A-Za-z0-9+/=]+)$/.exec(foto);
+  if (!match) {
+    throw new Error('La foto debe ser una imagen JPEG');
+  }
+  const buffer = Buffer.from(match[1], 'base64');
+  if (buffer.length > FACE_MAX_BYTES) {
+    throw new Error(`La foto pesa ${Math.round(buffer.length / 1024)} KB; el máximo es ${FACE_MAX_BYTES / 1024} KB`);
+  }
+  return buffer;
+}
+
+// El cuerpo multipart se arma como Buffer (no FormData) para que digest-fetch
+// pueda reenviarlo tal cual tras el desafío 401 de la autenticación Digest.
+function buildFaceMultipart(employeeNo, imageBuffer) {
+  const boundary = `----CallXFace${Date.now().toString(16)}`;
+  const metadata = JSON.stringify({
+    faceLibType: 'blackFD',
+    FDID: FACE_LIB_ID,
+    FPID: employeeNo.toString()
+  });
+  const head = Buffer.from(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="FaceDataRecord"\r\n` +
+    `Content-Type: application/json\r\n\r\n` +
+    `${metadata}\r\n` +
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="img"; filename="face.jpg"\r\n` +
+    `Content-Type: image/jpeg\r\n\r\n`
+  );
+  const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+  return {
+    body: Buffer.concat([head, imageBuffer, tail]),
+    contentType: `multipart/form-data; boundary=${boundary}`
+  };
+}
+
+async function sendFace(client, url, method, employeeNo, imageBuffer) {
+  const { body, contentType } = buildFaceMultipart(employeeNo, imageBuffer);
+  const response = await client.fetch(url, {
+    method,
+    body,
+    headers: { 'Content-Type': contentType, 'Accept': 'application/json' }
+  });
+  const text = await response.text();
+  let parsed = null;
+  try { parsed = JSON.parse(text); } catch { /* respuesta no JSON */ }
+  const ok = response.ok && (!parsed || parsed.statusCode === undefined || parsed.statusCode === 1);
+  return { ok, parsed, text, status: response.status };
+}
+
+async function uploadFaceToDevice(device, employeeNo, imageBuffer) {
+  const client = new DigestFetch(device.username, device.password, {
+    disableRetry: false,
+    algorithm: 'MD5'
+  });
+  const base = `https://${device.ip}/ISAPI/Intelligent/FDLib`;
+
+  try {
+    let result = await sendFace(client, `${base}/FaceDataRecord?format=json`, 'POST', employeeNo, imageBuffer);
+
+    // Si el usuario ya tenía una cara (p. ej. un reintento), se reemplaza.
+    const sub = result.parsed?.subStatusCode || '';
+    if (!result.ok && /exist/i.test(sub)) {
+      result = await sendFace(client, `${base}/FDSetUp?format=json`, 'PUT', employeeNo, imageBuffer);
+    }
+
+    if (result.ok) {
+      return { success: true };
+    }
+
+    const detalle = result.parsed
+      ? `${result.parsed.subStatusCode || result.parsed.statusString || 'error'}${result.parsed.errorMsg ? ` (${result.parsed.errorMsg})` : ''}`
+      : `HTTP ${result.status}: ${result.text.substring(0, 200)}`;
+    return { success: false, error: describirErrorCara(detalle) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+// Traduce los códigos más comunes del dispositivo a algo entendible.
+function describirErrorCara(detalle) {
+  const d = detalle.toLowerCase();
+  if (d.includes('modelingfailed') || d.includes('facemodel') || d.includes('lowscore')) {
+    return `El equipo no reconoció un rostro válido en la foto (${detalle}). Usa una foto de frente y bien iluminada.`;
+  }
+  if (d.includes('picturesize') || d.includes('toolarge') || d.includes('oversize')) {
+    return `La foto es demasiado grande para el equipo (${detalle}).`;
+  }
+  if (d.includes('notsupport') || d.includes('invalidoperation')) {
+    return `El equipo no admite carga de rostros por esta vía (${detalle}).`;
+  }
+  return detalle;
+}
+
 export async function POST(request) {
   try {
     const data = await request.json();
-    console.log('🔵 DATOS RECIBIDOS DEL FRONTEND:', data);
+    // No volcar la foto (base64) al log
+    const resumenLog = (Array.isArray(data) ? data : [data]).map(({ foto, ...rest }) => ({ ...rest, foto: foto ? '(adjunta)' : undefined }));
+    console.log('🔵 DATOS RECIBIDOS DEL FRONTEND:', resumenLog);
 
     // Verificar si es un array de usuarios o un solo usuario
     const users = Array.isArray(data) ? data : [data];
@@ -165,8 +273,17 @@ export async function POST(request) {
         continue;
       }
 
+      let fotoBuffer = null;
+      try {
+        fotoBuffer = decodeFoto(user.foto);
+      } catch (fotoError) {
+        validationErrors.push(`Usuario ${i + 1}: ${fotoError.message}`);
+        continue;
+      }
+
       validatedUsers.push({
         ...user,
+        fotoBuffer,
         // Busca el grupo por nombre en la tabla de departamentos; si el nombre
         // es nuevo, se crea ahí mismo con un groupId propio (los dispositivos
         // no distinguen entre grupos por permisos, todos comparten el mismo
@@ -211,12 +328,19 @@ export async function POST(request) {
       for (const device of DEVICES) {
         
         const deviceResult = await createUserOnDevice(device, user, user.departmentId);
-        
+
+        // La foto es opcional y su fallo no invalida la creación del usuario.
+        let face;
+        if (deviceResult.success && user.fotoBuffer) {
+          face = await uploadFaceToDevice(device, user.numeroEmpleado, user.fotoBuffer);
+        }
+
         userResults.deviceResults.push({
           deviceIp: device.ip,
           success: deviceResult.success,
           error: deviceResult.error,
-          response: deviceResult.response
+          response: deviceResult.response,
+          face
         });
 
         if (deviceResult.success) {

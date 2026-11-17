@@ -285,8 +285,10 @@ export async function POST(request: NextRequest) {
           genero             = $4,
           tipo_usuario       = $5,
           estado             = $6,
-          device_ip          = $7,
-          foto_path          = $8,
+          -- No pisar con vacío lo que ya trajo la sincronización con los
+          -- dispositivos (IP y ruta de la foto recién registrada).
+          device_ip          = COALESCE(NULLIF($7, ''), target.device_ip),
+          foto_path          = COALESCE(NULLIF($8, ''), target.foto_path),
           fecha_modificacion = GETDATE()
       WHEN NOT MATCHED THEN
         INSERT (employee_no, nombre, departamento, genero, tipo_usuario, estado, device_ip, foto_path, fecha_creacion, fecha_modificacion)

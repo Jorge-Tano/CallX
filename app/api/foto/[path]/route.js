@@ -25,6 +25,16 @@ export async function GET(request, { params }) {
 
     const { searchParams } = new URL(request.url);
     const deviceIpParam = searchParams.get('device');
+    // Solo se aceptan los dispositivos configurados: si no, cualquiera podría
+    // usar este endpoint (con las credenciales Hikvision) contra otro host.
+    if (deviceIpParam && !CONFIG.devices.includes(deviceIpParam)) {
+      return NextResponse.json({ error: 'Dispositivo no permitido' }, { status: 400 });
+    }
+    // Solo rutas de imagen del dispositivo (p. ej. LOCALS/pic/...), no la API ISAPI
+    // (que permitiría leer configuración con las credenciales del servidor).
+    if (/^\/?ISAPI/i.test(decodedPath) || decodedPath.includes('..')) {
+      return NextResponse.json({ error: 'Ruta no permitida' }, { status: 400 });
+    }
     const devicesToTry = deviceIpParam ? [deviceIpParam] : CONFIG.devices;
 
     console.log(`🖼️ Foto: ${decodedPath} | device: ${deviceIpParam || 'fallback'}`);

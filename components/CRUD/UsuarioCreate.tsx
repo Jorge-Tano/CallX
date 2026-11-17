@@ -4,6 +4,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Usuario } from "@/types/usuario";
 import * as XLSX from 'xlsx';
+import CameraInput from "./CameraInput";
 
 interface UsuarioCreateModalProps {
   onCreate: (usuarios: Usuario[]) => Promise<void>;
@@ -15,6 +16,8 @@ interface UsuarioForm {
   genero: string;
   numeroEmpleado: string;
   departamento: string;
+  // Solo en el alta individual: data URL JPEG del rostro
+  foto?: string | null;
 }
 
 const GENEROS = ["Masculino", "Femenino", "Otro"];
@@ -29,6 +32,7 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
   const [progress, setProgress] = useState<number>(0);
   const [departamentoPersonalizado, setDepartamentoPersonalizado] = useState(false);
   const [departamentos, setDepartamentos] = useState<{ groupId: number; nombre: string }[]>([]);
+  const [foto, setFoto] = useState<string | null>(null);
 
   // Traer la lista de departamentos desde la base de datos, no del código,
   // para que cualquier grupo nuevo (creado desde aquí o directo en el
@@ -153,7 +157,7 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
   // Crear usuario individual
   const crearIndividual = async (e: React.FormEvent) => {
     e.preventDefault();
-    await crearUsuarios([individualForm]);
+    await crearUsuarios([{ ...individualForm, foto }]);
   };
 
   // Crear usuarios masivos
@@ -257,6 +261,7 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
         departamento: defaultDepartamento || ""
       });
       setDepartamentoPersonalizado(false);
+      setFoto(null);
 
       setUsuariosMasivos([
         { nombre: "", genero: "", numeroEmpleado: "", departamento: defaultDepartamento || "" }
@@ -274,6 +279,22 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
       if (result.syncResult?.success) {
         message += "\n📊 Base de datos sincronizada automáticamente";
       }
+
+      // Resultado de la foto por dispositivo (no bloquea la creación)
+      result.results?.forEach((userResult: any) => {
+        const caras = (userResult.deviceResults || []).filter((d: any) => d.face);
+        if (caras.length === 0) return;
+        const fallidas = caras.filter((d: any) => !d.face.success);
+        if (fallidas.length === 0) {
+          message += `\n📷 Foto registrada en ${caras.length} dispositivo(s)`;
+        } else {
+          message += `\n⚠️ La foto de ${userResult.nombre} no se registró en:`;
+          fallidas.forEach((d: any) => {
+            message += `\n  • ${d.deviceIp}: ${d.face.error}`;
+          });
+          message += `\n  El usuario sí quedó creado; puedes cargar la foto directamente en el equipo.`;
+        }
+      });
 
       alert(message);
 
@@ -469,6 +490,13 @@ export default function UsuarioCreateModal({ onCreate, defaultDepartamento }: Us
                         disabled={loading}
                       />
                     )}
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Foto del rostro
+                    </label>
+                    <CameraInput value={foto} onPhoto={setFoto} disabled={loading} />
                   </div>
 
                   <div className="md:col-span-2 mt-6">

@@ -34,9 +34,15 @@ export async function POST(request: NextRequest) {
 
     // 2. VALIDAR ROL
     const rolesPermitidos = ['TI', 'Administrador', 'Team Leader', 'Supervisor']
-    const rolFinal = rol && rolesPermitidos.includes(rol) 
-      ? rol 
-      : 'TI' // Valor por defecto
+    // Antes un rol vacío o desconocido se convertía en 'TI' (el rol con más
+    // permisos). Ahora se exige un rol válido explícito.
+    if (!rol || !rolesPermitidos.includes(rol)) {
+      return NextResponse.json(
+        { error: `Rol inválido. Debe ser uno de: ${rolesPermitidos.join(', ')}` },
+        { status: 400 }
+      )
+    }
+    const rolFinal: string = rol
 
     console.log("✅ Rol asignado:", rolFinal)
 
